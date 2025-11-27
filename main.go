@@ -121,9 +121,17 @@ func main() {
 
 	finalHandler := corsMiddleware(router)
 
-	port := ":8000"
-	log.Printf("✅ Server berjalan di http://localhost%s", port)
-	if err := http.ListenAndServe(port, finalHandler); err != nil {
+	port := os.Getenv("PORT")
+
+	if port == "" {
+		port = "8000"
+	}
+
+	addr := "0.0.0.0:" + port
+
+	log.Printf("✅ Server berjalan di %s", addr)
+
+	if err := http.ListenAndServe(addr, finalHandler); err != nil {
 		log.Fatal("❌ Error starting server:", err)
 	}
 }
