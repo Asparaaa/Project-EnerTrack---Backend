@@ -67,6 +67,23 @@ func InitDB() {
 		log.Printf("Warning: Could not create merek table: %v", err)
 	}
 
+
+	createUsersTableSQL := `
+		CREATE TABLE IF NOT EXISTS users (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			username VARCHAR(100) NOT NULL,
+			email VARCHAR(100) NOT NULL UNIQUE,
+			password VARCHAR(255) NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);
+	`
+	_, err = DB.Exec(createUsersTableSQL)
+	if err != nil {
+		log.Printf("❌ Warning: Gagal membuat tabel users: %v", err)
+	} else {
+		log.Println("✅ Tabel 'users' siap digunakan/sudah ada.")
+	}
+
 	var count int
 	err = DB.QueryRow("SELECT COUNT(*) FROM merek").Scan(&count)
 	if err != nil {
