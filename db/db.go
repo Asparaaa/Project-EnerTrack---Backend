@@ -93,4 +93,14 @@ func InitDB() {
 	}
 
 	log.Println("✅ Database berhasil terkoneksi")
+
+	_, err = DB.Exec("ALTER TABLE users CHANGE id user_id INT AUTO_INCREMENT")
+	if err != nil {
+		// Kalau error, kemungkinan besar karena namanya sudah 'user_id'
+		log.Printf("⚠️ Skip Rename: %v (Abaikan kalau tabel sudah benar)", err)
+	} else {
+		log.Println("✅ SUKSES: Kolom 'id' berhasil diubah jadi 'user_id'")
+	}
+
+	log.Println("✅ Database berhasil terkoneksi")
 }
