@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strings" // <-- Package ditambahkan
+	"strings"
 	"time"
 )
 
@@ -37,30 +37,12 @@ func GetMonthlyStatisticsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ================== PERBAIKAN AUTENTIKASI DI SINI ==================
 	userID, ok := session.Values["user_id"].(int)
 	if !ok {
 		log.Println("❌ GetMonthlyStatisticsHandler: Unauthorized, user_id not found in session")
 		http.Error(w, `{"error": "Tidak terautentikasi"}`, http.StatusUnauthorized)
 		return
 	}
-	// ================== HAPUS QUERY USERNAME ==================
-	/*
-		username, ok := session.Values["username"].(string)
-		if !ok {
-			log.Println("❌ GetMonthlyStatisticsHandler: Unauthorized, username not found in session")
-			http.Error(w, `{"error": "Tidak terautentikasi"}`, http.StatusUnauthorized)
-			return
-		}
-
-		var userID int
-		errUser := db.DB.QueryRow("SELECT user_id FROM users WHERE username = ?", username).Scan(&userID)
-		if errUser != nil {
-			log.Printf("❌ GetMonthlyStatisticsHandler: Error getting user ID for %s: %v", username, errUser)
-			http.Error(w, `{"error": "Gagal mengambil user ID"}`, http.StatusInternalServerError)
-			return
-		}
-	*/
 
 	rows, errQuery := db.DB.Query(`
         SELECT
@@ -124,29 +106,12 @@ func GetWeeklyStatisticsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ================== PERBAIKAN AUTENTIKASI DI SINI ==================
 	userID, ok := session.Values["user_id"].(int)
 	if !ok {
 		log.Println("❌ GetWeeklyStatisticsHandler: Unauthorized, user_id not found in session")
 		http.Error(w, `{"error": "Tidak terautentikasi"}`, http.StatusUnauthorized)
 		return
 	}
-	// ================== HAPUS QUERY USERNAME ==================
-	/*
-		username, ok := session.Values["username"].(string)
-		if !ok {
-			log.Println("❌ GetWeeklyStatisticsHandler: Unauthorized, username not found in session")
-			http.Error(w, `{"error": "Tidak terautentikasi"}`, http.StatusUnauthorized)
-			return
-		}
-		var userID int
-		errUser := db.DB.QueryRow("SELECT user_id FROM users WHERE username = ?", username).Scan(&userID)
-		if errUser != nil {
-			log.Printf("❌ GetWeeklyStatisticsHandler: Error getting user ID for %s: %v", username, errUser)
-			http.Error(w, `{"error": "Gagal mengambil user ID"}`, http.StatusInternalServerError)
-			return
-		}
-	*/
 
 	// Ambil parameter 'date' dan bersihkan dari cache buster
 	dateQueryParam := r.URL.Query().Get("date")
@@ -218,8 +183,22 @@ func GetWeeklyStatisticsHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error": "Gagal membaca data statistik mingguan"}`, http.StatusInternalServerError)
 			return
 		}
-		powerByDate[dayDateStr] = totalPowerWh / 1000.0 // Wh ke kWh
-		log.Printf("✅ Weekly data found - Date: %s, Power: %.2f kWh", dayDateStr, totalPowerWh/1000.0)
+
+		// === PERBAIKAN UTAMA DI SINI ===
+		// Database mengembalikan string format RFC3339 (contoh: 2025-12-02T00:00:00Z)
+		// Kita perlu potong biar jadi YYYY-MM-DD saja agar cocok dengan kuncinya
+		
+		cleanDateKey := dayDateStr
+		// Jika ada huruf 'T', ambil bagian depannya saja
+		if idx := strings.Index(dayDateStr, "T"); idx != -1 {
+			cleanDateKey = dayDateStr[:idx]
+		} else if len(dayDateStr) >= 10 {
+			// Fallback: ambil 10 karakter pertama
+			cleanDateKey = dayDateStr[:10]
+		}
+		
+		powerByDate[cleanDateKey] = totalPowerWh / 1000.0 // Wh ke kWh
+		log.Printf("✅ Weekly data found - RAW: %s, CLEAN KEY: %s, Power: %.2f kWh", dayDateStr, cleanDateKey, totalPowerWh/1000.0)
 	}
 	if errRows := rows.Err(); errRows != nil {
 		log.Printf("❌ GetWeeklyStatisticsHandler: Error after iterating rows: %v", errRows)
@@ -238,7 +217,9 @@ func GetWeeklyStatisticsHandler(w http.ResponseWriter, r *http.Request) {
 			Label: daysOfWeekLabels[i],
 			Value: value,
 		})
-		log.Printf("✅ Day %d (%s - %s): %.2f kWh", i+1, daysOfWeekLabels[i], dateKey, value)
+		// Log lebih detail buat debugging
+		log.Printf("🔍 Looking for key [%s] -> Found: %.2f kWh", dateKey, value)
+		
 		currentDayInLoop = currentDayInLoop.AddDate(0, 0, 1)
 	}
 
@@ -256,30 +237,12 @@ func GetCategoryStatisticsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ================== PERBAIKAN AUTENTIKASI DI SINI ==================
 	userID, ok := session.Values["user_id"].(int)
 	if !ok {
 		log.Println("❌ GetCategoryStatisticsHandler: Unauthorized, user_id not found in session")
 		http.Error(w, `{"error": "Tidak terautentikasi"}`, http.StatusUnauthorized)
 		return
 	}
-	// ================== HAPUS QUERY USERNAME ==================
-	/*
-		username, ok := session.Values["username"].(string)
-		if !ok {
-			log.Println("❌ GetCategoryStatisticsHandler: Unauthorized, username not found in session")
-			http.Error(w, `{"error": "Tidak terautentikasi"}`, http.StatusUnauthorized)
-			return
-		}
-
-		var userID int
-		errUser := db.DB.QueryRow("SELECT user_id FROM users WHERE username = ?", username).Scan(&userID)
-		if errUser != nil {
-			log.Printf("❌ GetCategoryStatisticsHandler: Error getting user ID for %s: %v", username, errUser)
-			http.Error(w, `{"error": "Gagal mengambil user ID"}`, http.StatusInternalServerError)
-			return
-		}
-	*/
 
 	rows, errQuery := db.DB.Query(`
         SELECT
@@ -357,29 +320,12 @@ func GetDataRangeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ================== PERBAIKAN AUTENTIKASI DI SINI ==================
 	userID, ok := session.Values["user_id"].(int)
 	if !ok {
 		log.Println("❌ GetDataRangeHandler: Unauthorized, user_id not found in session")
 		http.Error(w, `{"error": "Tidak terautentikasi"}`, http.StatusUnauthorized)
 		return
 	}
-	// ================== HAPUS QUERY USERNAME ==================
-	/*
-		username, ok := session.Values["username"].(string)
-		if !ok {
-			log.Println("❌ GetDataRangeHandler: Unauthorized")
-			http.Error(w, `{"error": "Tidak terautentikasi"}`, http.StatusUnauthorized)
-			return
-		}
-		var userID int
-		errUser := db.DB.QueryRow("SELECT user_id FROM users WHERE username = ?", username).Scan(&userID)
-		if errUser != nil {
-			log.Printf("❌ GetDataRangeHandler: Error getting user ID: %v", errUser)
-			http.Error(w, `{"error": "Gagal mengambil user ID"}`, http.StatusInternalServerError)
-			return
-		}
-	*/
 
 	var response DateRangeResponse
 	query := `
@@ -402,4 +348,3 @@ func GetDataRangeHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
-
