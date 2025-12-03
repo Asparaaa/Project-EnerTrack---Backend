@@ -19,18 +19,17 @@ type HistoryItemResponse struct {
 	HouseCapacity    string  `json:"besar_listrik"`
 	Power            float64 `json:"daya"`
 	Usage            float64 `json:"durasi"`
-	// ================== 1. TAMBAHKAN FIELD INI ==================
 	// Nama JSON "dailyEnergy" harus cocok dengan yang diharapkan GSON di Android
 	DailyKwh float64 `json:"dailyEnergy"`
-	// ==========================================================
 }
 
 // Struct khusus untuk dropdown chat
 type DeviceOption struct {
-	Label   string `json:"label"`   // Nama untuk ditampilkan di Dropdown (misal: "AC Kamar")
+	Label   string `json:"label"`   // Nama untuk ditampilkan (misal: "AC Kamar")
 	Context string `json:"context"` // String lengkap untuk AI (misal: "AC Kamar (Samsung), 400 Watt...")
 }
 
+// GetDeviceHistoryHandler mengambil seluruh riwayat perangkat user
 func GetDeviceHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	// Ambil sesi
 	session, err := Store.Get(r, "elektronik_rumah_session")
@@ -47,7 +46,6 @@ func GetDeviceHistoryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ================== 2. QUERY SQL TETAP SAMA ==================
 	query := `
 		SELECT 
 			rp.id, 
@@ -64,7 +62,6 @@ func GetDeviceHistoryHandler(w http.ResponseWriter, r *http.Request) {
 		WHERE rp.user_id = ?
 		ORDER BY rp.tanggal_input DESC, rp.id DESC
 	`
-	// ====================================================================
 
 	rows, err := db.DB.Query(query, userID)
 	if err != nil {
@@ -77,7 +74,6 @@ func GetDeviceHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	var historyItems []HistoryItemResponse
 	for rows.Next() {
 		var item HistoryItemResponse
-		// ================== 3. SCAN TETAP SAMA ==================
 		if err := rows.Scan(
 			&item.ID, &item.Date, &item.Appliance, &item.ApplianceDetails,
 			&item.CategoryID, &item.CategoryName, &item.HouseCapacity,
@@ -87,8 +83,8 @@ func GetDeviceHistoryHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error": "Gagal membaca data riwayat"}`, http.StatusInternalServerError)
 			return
 		}
-		
-		// Hitung manual di sini
+
+		// Hitung manual daily kWh
 		item.DailyKwh = (item.Power * item.Usage) / 1000.0
 
 		historyItems = append(historyItems, item)
@@ -105,7 +101,7 @@ func GetDeviceHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(historyItems)
 }
 
-// === HANDLER BARU: UNTUK DROPDOWN CHAT ===
+// GetUniqueDevicesHandler mengambil daftar perangkat unik (untuk Dropdown Chat)
 func GetUniqueDevicesHandler(w http.ResponseWriter, r *http.Request) {
 	// 1. Validasi Session
 	session, err := Store.Get(r, "elektronik_rumah_session")
@@ -120,57 +116,59 @@ func GetUniqueDevicesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Query ambil perangkat (Kita urutkan dari terbaru biar dapet spek terkini)
+	// 2. Query ambil nama, merek, daya, durasi dari riwayat
+	// Kita urutkan ID DESC biar dapet data settingan terakhir user untuk alat tersebut
 	query := `
 		SELECT nama_perangkat, merek, daya, durasi 
 		FROM riwayat_perangkat 
 		WHERE user_id = ? 
 		ORDER BY id DESC
 	`
-	
+
 	rows, err := db.DB.Query(query, userID)
 	if err != nil {
+		log.Printf("❌ Error query unique devices: %v", err)
 		http.Error(w, `{"error": "Gagal query database"}`, http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
 
-	// 3. Filter Duplikat (Manual di Go biar simpel)
-	// Kita pake Map biar nama perangkat yg sama gak muncul 2 kali
+	// 3. Filter Duplikat (Manual di Go)
+	// Gunakan Map untuk mengecek apakah nama perangkat sudah pernah dimasukkan
 	uniqueMap := make(map[string]bool)
 	var options []DeviceOption
 
-	// Opsi default: "Pilih Perangkat (Umum)"
+	// Tambahkan Opsi Default paling atas
 	options = append(options, DeviceOption{
 		Label:   "Pilih Perangkat (Umum)",
-		Context: "",
+		Context: "", // Context kosong berarti pertanyaan umum
 	})
 
 	for rows.Next() {
 		var nama, merek string
 		var daya, durasi float64
-		
+
 		if err := rows.Scan(&nama, &merek, &daya, &durasi); err != nil {
 			continue
 		}
 
-		// Kalau nama ini belum ada di map, masukkan ke list
+		// Kalau nama perangkat ini belum ada di map, berarti ini data terbaru (karena ORDER BY DESC)
 		if !uniqueMap[nama] {
 			uniqueMap[nama] = true
-			
-			// Format Context String untuk AI
-			// Contoh: "AC Kamar (Samsung), Daya 400W, Nyala 8 Jam/hari"
-			contextStr := fmt.Sprintf("%s (%s), Daya %.0f Watt, Nyala %.1f Jam/hari", 
+
+			// Format Context String: Ini data rahasia yang bakal dikirim ke AI
+			// Contoh output: "AC Kamar (Samsung), Daya 400 Watt, Nyala 8.0 Jam/hari"
+			contextStr := fmt.Sprintf("%s (%s), Daya %.0f Watt, Nyala %.1f Jam/hari",
 				nama, merek, daya, durasi)
 
 			options = append(options, DeviceOption{
-				Label:   nama,      // Yang muncul di dropdown
-				Context: contextStr, // Yang dikirim ke AI
+				Label:   nama,      // Ini yang muncul di Layar HP User
+				Context: contextStr, // Ini yang dikirim ke Backend Chat
 			})
 		}
 	}
 
-	// 4. Kirim Response
+	// 4. Kirim Response JSON
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(options)
 }
