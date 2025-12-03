@@ -101,6 +101,14 @@ func main() {
 	router.HandleFunc("/api/devices", handlers.GetDevicesByBrandHandler)
 	router.HandleFunc("/house-capacity", handlers.GetHouseCapacityHandler)
 
+	 // 1. Route buat Dropdown (List Perangkat)
+    router.HandleFunc("/api/devices/list", handlers.GetUniqueDevicesHandler)
+
+    // 2. Route buat Chat dengan Context
+    router.HandleFunc("/api/chat", func(w http.ResponseWriter, r *http.Request) {
+        handlers.ChatHandler(w, r, model)
+    })
+
 	// Pendaftaran Rute CRUD Appliances
 	router.HandleFunc("/user/appliances", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {

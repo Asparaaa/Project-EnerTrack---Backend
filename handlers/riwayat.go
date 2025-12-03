@@ -3,6 +3,7 @@ package handlers
 import (
 	"EnerTrack-BE/db"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 )
@@ -24,6 +25,12 @@ type HistoryItemResponse struct {
 	// ==========================================================
 }
 
+// Struct khusus untuk dropdown chat
+type DeviceOption struct {
+	Label   string `json:"label"`   // Nama untuk ditampilkan di Dropdown (misal: "AC Kamar")
+	Context string `json:"context"` // String lengkap untuk AI (misal: "AC Kamar (Samsung), 400 Watt...")
+}
+
 func GetDeviceHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	// Ambil sesi
 	session, err := Store.Get(r, "elektronik_rumah_session")
@@ -41,7 +48,6 @@ func GetDeviceHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ================== 2. QUERY SQL TETAP SAMA ==================
-	// Kita tetep ambil daya dan durasi mentah
 	query := `
 		SELECT 
 			rp.id, 
@@ -81,12 +87,9 @@ func GetDeviceHistoryHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error": "Gagal membaca data riwayat"}`, http.StatusInternalServerError)
 			return
 		}
-		// ===============================================================
-
-		// ================== 4. HITUNG MANUAL DI SINI! ==================
-		// Ini adalah perbaikan utamanya. Kita hitung manual di backend.
+		
+		// Hitung manual di sini
 		item.DailyKwh = (item.Power * item.Usage) / 1000.0
-		// ===============================================================
 
 		historyItems = append(historyItems, item)
 	}
@@ -102,3 +105,72 @@ func GetDeviceHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(historyItems)
 }
 
+// === HANDLER BARU: UNTUK DROPDOWN CHAT ===
+func GetUniqueDevicesHandler(w http.ResponseWriter, r *http.Request) {
+	// 1. Validasi Session
+	session, err := Store.Get(r, "elektronik_rumah_session")
+	if err != nil {
+		http.Error(w, `{"error": "Gagal mendapatkan sesi"}`, http.StatusInternalServerError)
+		return
+	}
+
+	userID, ok := session.Values["user_id"].(int)
+	if !ok {
+		http.Error(w, `{"error": "Tidak terautentikasi"}`, http.StatusUnauthorized)
+		return
+	}
+
+	// 2. Query ambil perangkat (Kita urutkan dari terbaru biar dapet spek terkini)
+	query := `
+		SELECT nama_perangkat, merek, daya, durasi 
+		FROM riwayat_perangkat 
+		WHERE user_id = ? 
+		ORDER BY id DESC
+	`
+	
+	rows, err := db.DB.Query(query, userID)
+	if err != nil {
+		http.Error(w, `{"error": "Gagal query database"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	// 3. Filter Duplikat (Manual di Go biar simpel)
+	// Kita pake Map biar nama perangkat yg sama gak muncul 2 kali
+	uniqueMap := make(map[string]bool)
+	var options []DeviceOption
+
+	// Opsi default: "Pilih Perangkat (Umum)"
+	options = append(options, DeviceOption{
+		Label:   "Pilih Perangkat (Umum)",
+		Context: "",
+	})
+
+	for rows.Next() {
+		var nama, merek string
+		var daya, durasi float64
+		
+		if err := rows.Scan(&nama, &merek, &daya, &durasi); err != nil {
+			continue
+		}
+
+		// Kalau nama ini belum ada di map, masukkan ke list
+		if !uniqueMap[nama] {
+			uniqueMap[nama] = true
+			
+			// Format Context String untuk AI
+			// Contoh: "AC Kamar (Samsung), Daya 400W, Nyala 8 Jam/hari"
+			contextStr := fmt.Sprintf("%s (%s), Daya %.0f Watt, Nyala %.1f Jam/hari", 
+				nama, merek, daya, durasi)
+
+			options = append(options, DeviceOption{
+				Label:   nama,      // Yang muncul di dropdown
+				Context: contextStr, // Yang dikirim ke AI
+			})
+		}
+	}
+
+	// 4. Kirim Response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(options)
+}
