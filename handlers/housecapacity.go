@@ -29,7 +29,7 @@ func GetHouseCapacityHandler(w http.ResponseWriter, r *http.Request) {
 		"3.500 VA",
 		"4.400 VA",
 		"5.500 VA",
-		"6.600 VA ke atas",
+		"6.600 VA and above",
 	}
 
 	w.Header().Set("Content-Type", "application/json")
