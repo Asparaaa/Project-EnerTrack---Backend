@@ -34,7 +34,7 @@ func InitDB() {
 		log.Println("⚠️ Mengalihkan koneksi ke LOCALHOST (Laptop)...")
 		
 		dbUser = "root"
-		dbPass = "password123"
+		dbPass = "" 
 		dbHost = "127.0.0.1"
 		dbPort = "3306"
 		dbName = "elektronik_rumah"

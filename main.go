@@ -74,7 +74,7 @@ func main() {
 	}
 	defer client.Close()
 
-	model := client.GenerativeModel("gemini-1.5-flash-001")
+	model := client.GenerativeModel("gemini-1.5-flash")
 
 	router := http.NewServeMux()
 
