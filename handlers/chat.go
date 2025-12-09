@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -8,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/google/generative-ai-go/genai"
-	"google.golang.org/api/iterator"
 )
 
 // Request body dari Android
@@ -69,34 +69,33 @@ Batasan: Jawab maksimal 2-3 kalimat. Bahasa Indonesia santai.
 	// Gabungkan instruksi + pertanyaan user
 	finalPrompt := fmt.Sprintf("%s\nPertanyaan User: \"%s\"", systemInstruction, userMessage)
 
-	// 4. Kirim ke Gemini
+	// 4. Kirim ke Gemini (PAKAI GENERATE CONTENT BIASA, BUKAN STREAM)
+	// Gunakan r.Context() agar jika user close app, proses di Go juga berhenti
 	ctx := r.Context()
-	iter := model.GenerateContentStream(ctx, genai.Text(finalPrompt))
+	
+	resp, err := model.GenerateContent(ctx, genai.Text(finalPrompt))
+	if err != nil {
+		// Cek apakah error karena client (Android) memutus koneksi/timeout
+		if ctx.Err() == context.Canceled {
+			log.Println("⚠️ User membatalkan request (Client Disconnected/Timeout)")
+			return // Stop, jangan kirim response ke client yang udah pergi
+		}
 
-	// 5. Kumpulkan Response
-	var fullResponse strings.Builder
-	for {
-		resp, err := iter.Next()
-		if err == iterator.Done {
-			break
-		}
-		if err != nil {
-			log.Printf("❌ Error Gemini: %v", err)
-			http.Error(w, "Gagal menghubungi AI", http.StatusInternalServerError)
-			return
-		}
-		for _, cand := range resp.Candidates {
-			if cand.Content != nil {
-				for _, part := range cand.Content.Parts {
-					if text, ok := part.(genai.Text); ok {
-						fullResponse.WriteString(string(text))
-					}
-				}
+		log.Printf("❌ Error Gemini: %v", err)
+		http.Error(w, "Gagal menghubungi AI", http.StatusInternalServerError)
+		return
+	}
+
+	// 5. Ambil Response
+	var aiReply string
+	if len(resp.Candidates) > 0 && resp.Candidates[0].Content != nil {
+		for _, part := range resp.Candidates[0].Content.Parts {
+			if text, ok := part.(genai.Text); ok {
+				aiReply += string(text)
 			}
 		}
 	}
 
-	aiReply := fullResponse.String()
 	// Bersihkan tanda bintang (*) biar gak berantakan di HP
 	aiReply = strings.ReplaceAll(aiReply, "*", "") 
 
