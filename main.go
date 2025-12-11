@@ -95,9 +95,13 @@ func main() {
 	router.HandleFunc("/brands", handlers.GetBrandsHandler)
 	router.HandleFunc("/categories", handlers.GetCategoriesHandler)
 	router.HandleFunc("/submit", handlers.SubmitHandler)
+
+	// Pendaftaran Rute AI Features
 	router.HandleFunc("/analyze", func(w http.ResponseWriter, r *http.Request) {
 		handlers.AnalyzeHandler(w, r, model)
 	})
+	router.HandleFunc("/api/insight", handlers.GetInsightHandler)
+
 	router.HandleFunc("/api/devices", handlers.GetDevicesByBrandHandler)
 	router.HandleFunc("/house-capacity", handlers.GetHouseCapacityHandler)
 
