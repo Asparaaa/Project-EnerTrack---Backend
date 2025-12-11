@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"EnerTrack-BE/db"
-	"EnerTrack-BE/models" // Pastikan import ini sesuai dengan struktur project kamu
+	"EnerTrack-BE/models"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,16 +13,17 @@ import (
 	"github.com/google/generative-ai-go/genai"
 )
 
-// Definisikan Request Body untuk endpoint /analyze yang baru
+// Definisikan Request Body
 type AnalyzeRequest struct {
 	Devices      []models.Device `json:"devices"`
 	BesarListrik string          `json:"besar_listrik"`
 }
 
 // ==================================================================================
-// 1. ANALYZE HANDLER (Menerima input perangkat, hitung, tanya AI, simpan DB)
+// 1. ANALYZE HANDLER (Tetap dipertahankan buat fitur deep analysis)
 // ==================================================================================
 func AnalyzeHandler(w http.ResponseWriter, r *http.Request, model *genai.GenerativeModel) {
+	// ... (Bagian ini tidak perlu diubah, biarkan seperti sebelumnya)
 	log.Println("🔹 /analyze endpoint dipanggil")
 
 	if r.Method != http.MethodPost {
@@ -30,7 +31,6 @@ func AnalyzeHandler(w http.ResponseWriter, r *http.Request, model *genai.Generat
 		return
 	}
 
-	// Cek Session
 	session, err := Store.Get(r, "elektronik_rumah_session")
 	if err != nil {
 		http.Error(w, "Session not found", http.StatusUnauthorized)
@@ -42,7 +42,6 @@ func AnalyzeHandler(w http.ResponseWriter, r *http.Request, model *genai.Generat
 		return
 	}
 
-	// Decode JSON Body
 	var req AnalyzeRequest
 	err = json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
@@ -55,7 +54,6 @@ func AnalyzeHandler(w http.ResponseWriter, r *http.Request, model *genai.Generat
 		return
 	}
 
-	// Kalkulasi Power
 	totalDailyWattHours := 0
 	for _, device := range req.Devices {
 		totalDailyWattHours += device.Power * device.Duration
@@ -66,7 +64,6 @@ func AnalyzeHandler(w http.ResponseWriter, r *http.Request, model *genai.Generat
 	tariffRate := getTariffRate(req.BesarListrik)
 	estimatedMonthlyCost := monthlyKWh * tariffRate
 
-	// AI Process
 	prompt := buildPrompt(req.Devices)
 	ctx := r.Context()
 	sessionAI := model.StartChat()
@@ -77,21 +74,18 @@ func AnalyzeHandler(w http.ResponseWriter, r *http.Request, model *genai.Generat
 	}
 	aiResponse := formatAIResponse(resp)
 
-	// Cek Riwayat Terakhir (Optional)
 	var idSubmit string
 	var riwayatID int
 	err = db.DB.QueryRow(`SELECT id_submit, id FROM riwayat_perangkat WHERE user_id = ? ORDER BY tanggal_input DESC, id DESC LIMIT 1`, userID).Scan(&idSubmit, &riwayatID)
 	if err != nil {
-		riwayatID = 0 // Kalau tidak ada riwayat, set 0
+		riwayatID = 0
 	}
 
-	// Simpan Hasil Analisis ke DB
 	err = SaveAnalysisToDB(userID, riwayatID, totalDailyWattHours, dailyKWh, aiResponse, estimatedMonthlyCost)
 	if err != nil {
 		log.Printf("❌ Failed to save analysis: %v", err)
 	}
 
-	// Response ke Frontend
 	response := map[string]interface{}{
 		"total_power_wh":       totalDailyWattHours,
 		"daily_kwh":            dailyKWh,
@@ -107,42 +101,21 @@ func AnalyzeHandler(w http.ResponseWriter, r *http.Request, model *genai.Generat
 	json.NewEncoder(w).Encode(response)
 }
 
-// ==================================================================================
-// 2. FUNGSI SAVE TO DB
-// ==================================================================================
 func SaveAnalysisToDB(userID int, riwayatID int, totalPowerWh int, totalPowerKWh float64, aiResponse string, estimatedCost float64) error {
 	estimatedCostRp := formatRupiah(estimatedCost)
-
-	// Pastikan tabel 'hasil_analisis' sudah ada di database kamu!
 	query := `
         INSERT INTO hasil_analisis (
-            user_id,
-            riwayat_id,
-            total_power_wh,
-            total_power_kwh,
-            ai_response,
-            estimated_cost_rp
+            user_id, riwayat_id, total_power_wh, total_power_kwh, ai_response, estimated_cost_rp
         ) VALUES (?, ?, ?, ?, ?, ?)`
-
-	_, err := db.DB.Exec(query,
-		userID,
-		riwayatID,
-		totalPowerWh,
-		totalPowerKWh,
-		aiResponse,
-		estimatedCostRp,
-	)
-
+	_, err := db.DB.Exec(query, userID, riwayatID, totalPowerWh, totalPowerKWh, aiResponse, estimatedCostRp)
 	if err != nil {
 		return fmt.Errorf("failed to save analysis: %v", err)
 	}
-
-	log.Printf("✅ Analysis saved: UserID=%d, KWh=%.2f", userID, totalPowerKWh)
 	return nil
 }
 
 // ==================================================================================
-// 3. GET INSIGHT HANDLER (Grade Efisiensi - ENGLISH VERSION)
+// 3. GET INSIGHT HANDLER (VERSI REAL-TIME DARI HISTORY) 🚀
 // ==================================================================================
 
 type Tip struct {
@@ -156,7 +129,7 @@ type InsightResponse struct {
 	Message     string `json:"message"`
 	Percentage  int    `json:"percentage"`
 	Tips        []Tip  `json:"tips"`
-	Calculation string `json:"calculation_basis"` // Tambahan info buat frontend
+	Calculation string `json:"calculation_basis"`
 }
 
 func GetInsightHandler(w http.ResponseWriter, r *http.Request) {
@@ -172,21 +145,25 @@ func GetInsightHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// B. Ambil Data Analisis Terakhir (Daily KWh)
-	var lastDailyKwh float64
-	queryLastAnalysis := `
-		SELECT total_power_kwh 
-		FROM hasil_analisis 
+	// B. Ambil Total Pemakaian HARIAN dari Tabel HISTORY (riwayat_perangkat)
+	// Kita ambil SUM semua alat yang diinput di BULAN INI.
+	// Jadi kalau user nambah alat di history, grade langsung berubah.
+	var totalDailyWh int
+	queryHistorySum := `
+		SELECT COALESCE(SUM(daya * durasi), 0)
+		FROM riwayat_perangkat
 		WHERE user_id = ? 
-		ORDER BY id DESC LIMIT 1
+		AND MONTH(tanggal_input) = MONTH(CURDATE()) 
+		AND YEAR(tanggal_input) = YEAR(CURDATE())
 	`
-	err = db.DB.QueryRow(queryLastAnalysis, userID).Scan(&lastDailyKwh)
+	err = db.DB.QueryRow(queryHistorySum, userID).Scan(&totalDailyWh)
 	if err != nil {
-		lastDailyKwh = 0 // Belum pernah analisis
+		totalDailyWh = 0
 	}
 
-	// Konversi ke Bulanan (x30 hari)
-	estimatedMonthlyKwh := lastDailyKwh * 30
+	// Konversi ke Proyeksi Bulanan (x 30 hari)
+	// (Wh / 1000) = kWh -> dikali 30 hari
+	estimatedMonthlyKwh := (float64(totalDailyWh) / 1000.0) * 30
 
 	// C. Ambil Kapasitas Listrik Rumah (VA)
 	var capacityStr string
@@ -201,6 +178,7 @@ func GetInsightHandler(w http.ResponseWriter, r *http.Request) {
 	if capacity == 0 { capacity = 1300 }
 
 	// D. Logic Perhitungan Grade
+	// Batas Wajar = 40% dari Kapasitas Maksimum (Full Load 24 Jam)
 	maxKwhReasonable := (capacity / 1000.0) * 24 * 30 * 0.4
 
 	var usagePercentage int
@@ -213,7 +191,7 @@ func GetInsightHandler(w http.ResponseWriter, r *http.Request) {
 	var grade, message string
 	var tips []Tip
 
-	// Logic Grading (ENGLISH)
+	// Logic Grading
 	switch {
 	case usagePercentage < 80:
 		grade = "A"
@@ -233,8 +211,9 @@ func GetInsightHandler(w http.ResponseWriter, r *http.Request) {
 		grade = "C"
 		message = "Attention! Usage is quite high."
 		tips = []Tip{
-			{"Use Timers", "Limit duration of AC/TV usage.", "ac"},
-			{"Unplug Devices", "Unplug electronics when not in use.", "plug"},
+			{"Check High Power Devices", "Your usage is exceeding normal limits.", "general"},
+			{"Limit AC Usage", "Try using a timer for your air conditioner.", "ac"},
+			{"Unplug Unused Electronics", "Devices on standby still consume power.", "plug"},
 		}
 	}
 
@@ -244,17 +223,14 @@ func GetInsightHandler(w http.ResponseWriter, r *http.Request) {
 		Message:     message,
 		Percentage:  usagePercentage,
 		Tips:        tips,
-		Calculation: "monthly_projection",
+		Calculation: "monthly_projection_history", // Penanda sumber data
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
-// ==================================================================================
-// 4. HELPER FUNCTIONS
-// ==================================================================================
-
+// ... (Helper functions tetap sama: formatRupiah, getTariffRate, buildPrompt, formatAIResponse)
 func formatRupiah(amount float64) string {
 	rounded := math.Floor(amount)
 	amountStr := fmt.Sprintf("%.0f", rounded)
