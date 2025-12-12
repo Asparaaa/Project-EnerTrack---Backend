@@ -10,7 +10,11 @@ import (
 	"EnerTrack-BE/db"
 
 	"cloud.google.com/go/firestore"
+	firebase "firebase.google.com/go"
+	"firebase.google.com/go/messaging" // Library buat kirim notif
 )
+
+const DEVICE_TOKEN_HP_KAMU = " fZl5mptxTx6TaYB3tSfoEn:APA91bGsmw1X093FFlw2BrWn7PnaGOLsn-iZBvznBCdW5auE1nHqXaesSkzwwKaAKF5Kam2ytqIFYVSOP3PT2lmHWYe7Wx5jl1u0HeXEpqNY4Hv7ghwRJrI " 
 
 type IotData struct {
 	UserID      int     `json:"user_id"`
@@ -21,7 +25,8 @@ type IotData struct {
 	KwhTotal    float64 `json:"kwh_total"`
 }
 
-func IotInputHandler(w http.ResponseWriter, r *http.Request, fs *firestore.Client) {
+// Handler menerima *firebase.App supaya bisa akses Messaging & Firestore
+func IotInputHandler(w http.ResponseWriter, r *http.Request, app *firebase.App) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed, use POST", http.StatusMethodNotAllowed)
 		return
@@ -30,61 +35,101 @@ func IotInputHandler(w http.ResponseWriter, r *http.Request, fs *firestore.Clien
 	var data IotData
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		log.Printf("❌ Error decode JSON IoT: %v", err)
-		http.Error(w, "Format JSON tidak valid", http.StatusBadRequest)
+		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
 		return
 	}
 
-	if data.UserID == 0 || data.DeviceLabel == "" {
-		http.Error(w, "user_id dan device_label wajib diisi", http.StatusBadRequest)
-		return
+	ctx := context.Background()
+
+	// 1. Siapkan Client (Firestore & Messaging)
+	firestoreClient, err := app.Firestore(ctx)
+	if err != nil {
+		log.Printf("❌ Gagal init Firestore: %v", err)
+	} else {
+		defer firestoreClient.Close()
 	}
 
-	// --- A. SIMPAN KE MYSQL ---
+	messagingClient, err := app.Messaging(ctx)
+	if err != nil {
+		log.Printf("❌ Gagal init Messaging: %v", err)
+	}
+
+	// --- 2. LOGIKA ALARM NOTIFIKASI (FIX) ---
+	var notifTitle string
+	var notifBody string
+	kirimNotif := false
+
+	// Skenario 1: Bahaya Voltase Tinggi
+	if data.Voltase > 240.0 {
+		notifTitle = "⚠️ DANGER: Overvoltage!"
+		notifBody = fmt.Sprintf("Voltage at %s spiked to %.1f V! Check immediately.", data.DeviceLabel, data.Voltase)
+		kirimNotif = true
+	}
+
+	// Skenario 2: Alat Mati (Watt 0)
+	if data.Watt == 0 {
+		notifTitle = "Info: Device Off"
+		notifBody = fmt.Sprintf("%s is currently consuming 0 Watt (Standby).", data.DeviceLabel)
+		kirimNotif = true
+	}
+
+	// EKSEKUSI KIRIM NOTIFIKASI KE HP
+	if kirimNotif && messagingClient != nil && len(DEVICE_TOKEN_HP_KAMU) > 20 {
+		message := &messaging.Message{
+			Token: DEVICE_TOKEN_HP_KAMU, // Kirim spesifik ke HP kamu
+			Notification: &messaging.Notification{
+				Title: notifTitle,
+				Body:  notifBody,
+			},
+			// Data tambahan (bisa dibaca Android di background)
+			Data: map[string]string{
+				"status": "alert",
+				"device": data.DeviceLabel,
+			},
+		}
+
+		response, err := messagingClient.Send(ctx, message)
+		if err != nil {
+			log.Printf("❌ Gagal kirim notif FCM: %v", err)
+		} else {
+			log.Printf("✅ Notifikasi sukses dikirim! ID: %s", response)
+		}
+	}
+	// ----------------------------------------
+
+	// 3. Simpan ke MySQL (History)
 	query := `
         INSERT INTO energy_logs (user_id, device_label, voltase, ampere, watt, kwh_total) 
         VALUES (?, ?, ?, ?, ?, ?)
     `
-	_, err := db.DB.Exec(query, data.UserID, data.DeviceLabel, data.Voltase, data.Ampere, data.Watt, data.KwhTotal)
-
+	_, err = db.DB.Exec(query, data.UserID, data.DeviceLabel, data.Voltase, data.Ampere, data.Watt, data.KwhTotal)
 	if err != nil {
-		log.Printf("❌ Gagal simpan ke MySQL: %v", err)
-	} else {
-		log.Printf("✅ Data tersimpan di MySQL (User: %d, Alat: %s)", data.UserID, data.DeviceLabel)
+		log.Printf("❌ Gagal simpan MySQL: %v", err)
 	}
 
-	// --- B. UPDATE KE FIREBASE ---
-	if fs != nil {
-		ctx := context.Background()
+	// 4. Update Firestore (Realtime UI)
+	if firestoreClient != nil {
 		docID := fmt.Sprintf("user%d_%s", data.UserID, data.DeviceLabel)
-
-		// --- LOGIKA BARU: Tentukan Status berdasarkan Watt ---
-		statusDevice := "OFF"
-		if data.Watt > 0 {
-			statusDevice = "ON"
+		statusDevice := "ON"
+		if data.Watt == 0 {
+			statusDevice = "OFF"
 		}
-		// ----------------------------------------------------
 
-		_, err = fs.Collection("monitoring_live").Doc(docID).Set(ctx, map[string]interface{}{
+		_, err = firestoreClient.Collection("monitoring_live").Doc(docID).Set(ctx, map[string]interface{}{
 			"user_id":     data.UserID,
 			"device_name": data.DeviceLabel,
 			"voltase":     data.Voltase,
 			"ampere":      data.Ampere,
 			"watt":        data.Watt,
 			"kwh_total":   data.KwhTotal,
-			"status":      statusDevice,              // Pakai variable statusDevice
+			"status":      statusDevice,
 			"last_update": firestore.ServerTimestamp,
 		})
-
 		if err != nil {
-			log.Printf("❌ Gagal update Firebase: %v", err)
-		} else {
-			log.Printf("✅ Data terupdate di Firebase Doc: %s (Status: %s)", docID, statusDevice)
+			log.Printf("❌ Gagal update Firestore: %v", err)
 		}
-	} else {
-		log.Println("⚠️ Firestore Client bernilai nil (belum connect), skip update Firebase.")
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"success", "message":"Data IoT received and processed"}`))
+	w.Write([]byte(`{"status":"success", "message":"Data processed"}`))
 }
