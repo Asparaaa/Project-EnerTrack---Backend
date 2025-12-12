@@ -14,7 +14,7 @@ import (
 	"google.golang.org/api/option"
 )
 
-// ... (Struct UserInput & Device TIDAK BERUBAH, biarkan ada di sini) ...
+// ... (Struct UserInput & Device biarkan saja) ...
 type UserInput struct {
 	BillingType string `json:"billingtype"`
 	Electricity struct {
@@ -59,7 +59,7 @@ func main() {
 	db.InitDB()
 	defer db.DB.Close()
 
-	// --- SETUP FIREBASE (SUPAYA BISA MESSAGING) ---
+	// --- SETUP FIREBASE ---
 	firebaseCreds := os.Getenv("FIREBASE_CREDENTIALS")
 	ctx := context.Background()
 	var sa option.ClientOption
@@ -72,20 +72,18 @@ func main() {
 		sa = option.WithCredentialsFile("serviceAccountKey.json")
 	}
 
-	// Init App Firebase (Induknya)
 	app, err := firebase.NewApp(ctx, nil, sa)
 	if err != nil {
 		log.Printf("❌ Gagal init Firebase App: %v", err)
 	}
-
-	// Init Firestore Client (Database) - Masih dipakai buat fitur lain
+	
+	// Firestore Client hanya untuk pengecekan koneksi awal di main
 	firestoreClientDB, err := app.Firestore(ctx)
 	if err != nil {
 		log.Printf("❌ Gagal konek Firestore: %v", err)
 	} else {
 		defer firestoreClientDB.Close()
 	}
-	// -------------------------
 
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
@@ -102,7 +100,6 @@ func main() {
 
 	router := http.NewServeMux()
 
-	// ... (Route Login, Register, dll BIARKAN SAJA) ...
 	router.HandleFunc("/login", handlers.LoginHandler)
 	router.HandleFunc("/register", handlers.RegisterHandler)
 	router.HandleFunc("/logout", handlers.LogoutHandler)
@@ -142,12 +139,14 @@ func main() {
 	router.HandleFunc("/user/appliances/", handlers.GetApplianceByIDHandler)
 	router.HandleFunc("/user/profile", handlers.UpdateUserProfileHandler)
 
-	// === ROUTE IOT (UPDATE PENTING DI SINI) ===
-	// Kita lempar 'app' (bukan cuma firestore client) supaya bisa akses Notifikasi
+	// === ROUTE BARU BUAT UPDATE TOKEN ===
+	router.HandleFunc("/user/fcm-token", handlers.UpdateFcmTokenHandler)
+	// ====================================
+
+	// Route IoT Input
 	router.HandleFunc("/api/iot/input", func(w http.ResponseWriter, r *http.Request) {
 		handlers.IotInputHandler(w, r, app)
 	})
-	// ==========================================
 
 	finalHandler := corsMiddleware(router)
 	port := os.Getenv("PORT")
