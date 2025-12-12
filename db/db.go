@@ -82,8 +82,19 @@ func InitDB() {
 		log.Printf("❌ Warning: Gagal membuat tabel users: %v", err)
 	}
 
-	// 3. Tabel Energy Logs (IOT) - BARU DITAMBAHKAN
-	// Ini akan otomatis membuat tabelnya di Localhost kalau belum ada
+	// 2.5 (AUTO-UPDATE) Tambah kolom FCM Token di tabel users
+	// Logic: Coba alter table. Kalau error (misal karena kolom sudah ada), log aja sebagai info.
+	log.Println("🔄 Mencoba memastikan kolom 'fcm_token' ada di tabel users...")
+	addFcmTokenSQL := `ALTER TABLE users ADD COLUMN fcm_token VARCHAR(512) DEFAULT NULL`
+	_, err = DB.Exec(addFcmTokenSQL)
+	if err != nil {
+		// Error code 1060 adalah "Duplicate column name", artinya kolom udah ada.
+		log.Printf("ℹ️ Info: Kolom 'fcm_token' mungkin sudah ada (Database msg: %v)", err)
+	} else {
+		log.Println("✅ Sukses menambahkan kolom 'fcm_token' ke tabel users!")
+	}
+
+	// 3. Tabel Energy Logs (IOT)
 	createEnergyLogsSQL := `
 		CREATE TABLE IF NOT EXISTS energy_logs (
 			id INT AUTO_INCREMENT PRIMARY KEY,
