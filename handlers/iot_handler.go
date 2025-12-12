@@ -14,7 +14,7 @@ import (
 	"firebase.google.com/go/messaging" // Library buat kirim notif
 )
 
-const DEVICE_TOKEN_HP_KAMU = " fZl5mptxTx6TaYB3tSfoEn:APA91bGsmw1X093FFlw2BrWn7PnaGOLsn-iZBvznBCdW5auE1nHqXaesSkzwwKaAKF5Kam2ytqIFYVSOP3PT2lmHWYe7Wx5jl1u0HeXEpqNY4Hv7ghwRJrI " 
+const DEVICE_TOKEN_HP_KAMU =" fZl5mptxTx6TaYB3tSfoEn:APA91bGsmw1X093FFlw2BrWn7PnaGOLsn-iZBvznBCdW5auE1nHqXaesSkzwwKaAKF5Kam2ytqIFYVSOP3PT2lmHWYe7Wx5jl1u0HeXEpqNY4Hv7ghwRJrI " 
 
 type IotData struct {
 	UserID      int     `json:"user_id"`
