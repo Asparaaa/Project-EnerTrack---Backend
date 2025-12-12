@@ -9,6 +9,7 @@ import (
 	"EnerTrack-BE/db"
 	"EnerTrack-BE/handlers"
 
+	firebase "firebase.google.com/go" // <-- Library Firebase
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
 )
@@ -58,6 +59,36 @@ func main() {
 	db.InitDB()
 	defer db.DB.Close()
 
+	// --- 1. SETUP FIREBASE ---
+	// Ambil kredensial dari Env Var (buat di Railway) atau file lokal
+	firebaseCreds := os.Getenv("FIREBASE_CREDENTIALS")
+	ctx := context.Background()
+	var sa option.ClientOption
+
+	if firebaseCreds != "" {
+		log.Println("✅ FIREBASE_CREDENTIALS ditemukan dari Environment Variable")
+		sa = option.WithCredentialsJSON([]byte(firebaseCreds))
+	} else {
+		log.Println("⚠️ FIREBASE_CREDENTIALS kosong, mencoba cari file 'serviceAccountKey.json'...")
+		sa = option.WithCredentialsFile("serviceAccountKey.json")
+	}
+
+	app, err := firebase.NewApp(ctx, nil, sa)
+	if err != nil {
+		log.Printf("❌ Gagal init Firebase App: %v", err)
+	}
+
+	// Client Firestore ini yang bakal kita lempar ke handler
+	firestoreClientDB, err := app.Firestore(ctx)
+	if err != nil {
+		log.Printf("❌ Gagal konek Firestore: %v", err)
+	} else {
+		log.Println("✅ Berhasil terkoneksi ke Firestore")
+		defer firestoreClientDB.Close()
+	}
+	// -------------------------
+
+	// --- 2. SETUP GEMINI AI ---
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
 		log.Fatalln("⚠️ GEMINI_API_KEY tidak ditemukan dalam variabel lingkungan")
@@ -65,7 +96,6 @@ func main() {
 		log.Println("✅ GEMINI_API_KEY ditemukan")
 	}
 
-	ctx := context.Background()
 	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
 	if err != nil {
 		log.Fatalf("Error creating AI client: %v", err)
@@ -76,27 +106,28 @@ func main() {
 
 	model := client.GenerativeModel("gemini-2.5-flash")
 
+	// --- 3. ROUTING ---
 	router := http.NewServeMux()
 
-	// Pendaftaran Rute Autentikasi
+	// Route Autentikasi
 	router.HandleFunc("/login", handlers.LoginHandler)
 	router.HandleFunc("/register", handlers.RegisterHandler)
 	router.HandleFunc("/logout", handlers.LogoutHandler)
 	router.HandleFunc("/auth/check-session", handlers.CheckSessionHandler)
 
-	// Pendaftaran Rute Statistik
+	// Route Statistik
 	router.HandleFunc("/statistics/weekly", handlers.GetWeeklyStatisticsHandler)
 	router.HandleFunc("/statistics/monthly", handlers.GetMonthlyStatisticsHandler)
 	router.HandleFunc("/statistics/data-range", handlers.GetDataRangeHandler)
 	router.HandleFunc("/statistics/category", handlers.GetCategoryStatisticsHandler)
 
-	// Pendaftaran Rute Fitur Inti
+	// Route Fitur Inti
 	router.HandleFunc("/history", handlers.GetDeviceHistoryHandler)
 	router.HandleFunc("/brands", handlers.GetBrandsHandler)
 	router.HandleFunc("/categories", handlers.GetCategoriesHandler)
 	router.HandleFunc("/submit", handlers.SubmitHandler)
 
-	// Pendaftaran Rute AI Features
+	// Route AI Features
 	router.HandleFunc("/analyze", func(w http.ResponseWriter, r *http.Request) {
 		handlers.AnalyzeHandler(w, r, model)
 	})
@@ -105,15 +136,22 @@ func main() {
 	router.HandleFunc("/api/devices", handlers.GetDevicesByBrandHandler)
 	router.HandleFunc("/house-capacity", handlers.GetHouseCapacityHandler)
 
-	 // 1. Route buat Dropdown (List Perangkat)
-    router.HandleFunc("/api/devices/list", handlers.GetUniqueDevicesHandler)
+	// Route Dropdown
+	router.HandleFunc("/api/devices/list", handlers.GetUniqueDevicesHandler)
 
-    // 2. Route buat Chat dengan Context
-    router.HandleFunc("/api/chat", func(w http.ResponseWriter, r *http.Request) {
-        handlers.ChatHandler(w, r, model)
-    })
+	// Route Chat Context
+	router.HandleFunc("/api/chat", func(w http.ResponseWriter, r *http.Request) {
+		handlers.ChatHandler(w, r, model)
+	})
 
-	// Pendaftaran Rute CRUD Appliances
+	// === ROUTE KHUSUS IOT (New) ===
+	router.HandleFunc("/api/iot/input", func(w http.ResponseWriter, r *http.Request) {
+		// Kita passing client Firestore ke dalam handler
+		handlers.IotInputHandler(w, r, firestoreClientDB)
+	})
+	// ==============================
+
+	// Route CRUD Appliances
 	router.HandleFunc("/user/appliances", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
