@@ -140,7 +140,7 @@ func main() {
 	router.HandleFunc("/user/profile", handlers.UpdateUserProfileHandler)
 
 	// === ROUTE BARU BUAT UPDATE TOKEN ===
-	router.HandleFunc("/user/fcm-token", handlers.UpdateFcmTokenHandler)
+	router.HandleFunc("/api/user/fcm-token", handlers.UpdateFcmTokenHandler)
 	// ====================================
 
 	// Route IoT Input
