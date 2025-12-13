@@ -68,10 +68,10 @@ func main() {
 		sa = option.WithCredentialsFile("serviceAccountKey.json")
 	}
 
-    // 🔥 FIX 1: Konfigurasi Firebase untuk Realtime Database
+    // 🔥 PERBAIKAN: URL Realtime DB harus URL root, tanpa /sensor.json atau spasi di belakang
 	conf := &firebase.Config{
-		// ⚠️ PASTIKAN URL INI SESUAI DENGAN REALTIME DB KAMU ⚠️
-		DatabaseURL: "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app/sensor.json", 
+		// URL Realtime Database yang BENAR (Hanya root URL)
+		DatabaseURL: "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app", 
 	}
 
 	app, err := firebase.NewApp(ctx, conf, sa) // Gunakan 'conf' di sini
@@ -129,7 +129,7 @@ func main() {
     router.HandleFunc("/user/appliances/", handlers.GetApplianceByIDHandler)
     router.HandleFunc("/user/profile", handlers.UpdateUserProfileHandler)
     
-    // 🔥 ROUTE KHUSUS IOT 🔥 (FIX 2: Implementasi Handler)
+    // 🔥 ROUTE KHUSUS IOT 🔥
     // 1. Rute POST untuk mengirim data dari Arduino (Push)
     router.HandleFunc("/api/iot/input", func(w http.ResponseWriter, r *http.Request) {
         handlers.IotInputHandler(w, r, app)
