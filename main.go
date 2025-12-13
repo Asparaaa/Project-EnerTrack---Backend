@@ -7,7 +7,7 @@ import (
 	"os"
 
 	"EnerTrack-BE/db"
-	"EnerTrack-BE/handlers"
+	"EnerTrack-BE/handlers" // Pastikan package handlers diimpor
 
 	firebase "firebase.google.com/go"
 	"github.com/google/generative-ai-go/genai"
@@ -15,7 +15,6 @@ import (
 )
 
 // Definisikan struct di main.go jika diperlukan, atau pastikan import handler sudah benar.
-// Karena struct tidak terlibat di routing, kita bisa abaikan di sini.
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -27,7 +26,6 @@ func corsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 
-		// Menambahkan log di sini untuk setiap request yang masuk (opsional, tapi membantu debug)
 		log.Printf("Incoming Request: %s %s", r.Method, r.URL.Path)
 
 		if r.Method == "OPTIONS" {
@@ -41,14 +39,11 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 // Handler sementara untuk /user/appliances yang menjamin respons JSON array kosong
 func TemporaryUserAppliancesHandler(w http.ResponseWriter, r *http.Request) {
-    // Ini hanya placeholder untuk mencegah EOFException di Android jika data kosong.
-    // Jika ada handler asli, pastikan handler asli mengembalikan JSON array ([]).
     if r.Method != http.MethodGet {
         w.WriteHeader(http.StatusMethodNotAllowed)
         return
     }
     
-    // Pastikan mengembalikan JSON array kosong: []
     w.Header().Set("Content-Type", "application/json")
     w.WriteHeader(http.StatusOK)
     w.Write([]byte("[]"))
@@ -99,7 +94,7 @@ func main() {
 	model := client.GenerativeModel("gemini-2.5-flash")
 
 	router := http.NewServeMux()
-    // --- PENDAFTARAN RUTING LAMA ---
+    // --- PENDAFTARAN RUTING LAINNYA ---
     router.HandleFunc("/login", handlers.LoginHandler)
     router.HandleFunc("/register", handlers.RegisterHandler)
     router.HandleFunc("/logout", handlers.LogoutHandler)
@@ -113,7 +108,7 @@ func main() {
     router.HandleFunc("/categories", handlers.GetCategoriesHandler)
     router.HandleFunc("/submit", handlers.SubmitHandler)
     
-    // FIX: Gunakan variabel 'model' di sini
+    // Rute AI
     router.HandleFunc("/analyze", func(w http.ResponseWriter, r *http.Request) {
         handlers.AnalyzeHandler(w, r, model) 
     })
@@ -123,21 +118,25 @@ func main() {
     router.HandleFunc("/house-capacity", handlers.GetHouseCapacityHandler)
     router.HandleFunc("/api/devices/list", handlers.GetUniqueDevicesHandler)
     
-    // FIX: Menggunakan handler sementara untuk /user/appliances
+    // Rute Appliances & Profile
     router.HandleFunc("/user/appliances", TemporaryUserAppliancesHandler)
-
     router.HandleFunc("/user/appliances/", handlers.GetApplianceByIDHandler)
     router.HandleFunc("/user/profile", handlers.UpdateUserProfileHandler)
+    
+    // 🔥 ROUTE KHUSUS IOT 🔥
+    // 1. Rute POST untuk mengirim data dari Arduino (Push) -> Memanggil IotInputHandler dari iot_handler.go
     router.HandleFunc("/api/iot/input", func(w http.ResponseWriter, r *http.Request) {
         handlers.IotInputHandler(w, r, app)
     })
-
-
+    
+    // 2. Rute GET untuk Polling Perintah ke Arduino (Pull) -> Memanggil GetCommandForDeviceHandler dari iot_handler.go
+    router.HandleFunc("/api/iot/command", func(w http.ResponseWriter, r *http.Request) {
+        handlers.GetCommandForDeviceHandler(w, r, app)
+    })
+    
 	// === ROUTE FCM BARU: /fcm/update ===
 	log.Println("⚡️ DEBUG: Mendaftarkan rute FCM baru: /fcm/update (Non-slash & Trailing Slash)")
-	// Rute tanpa slash (sesuai kode Android)
 	router.HandleFunc("/fcm/update", handlers.UpdateFcmTokenHandler)
-	// Rute dengan slash (antisipasi jika Android/Retrofit/Railway menambahkan slash)
 	router.HandleFunc("/fcm/update/", handlers.UpdateFcmTokenHandler)
 	// ====================================
 
