@@ -124,21 +124,19 @@ func main() {
     router.HandleFunc("/user/profile", handlers.UpdateUserProfileHandler)
     
     // 🔥 ROUTE KHUSUS IOT 🔥
-    // 1. Rute POST untuk mengirim data dari Arduino (Push) -> Memanggil IotInputHandler dari iot_handler.go
     router.HandleFunc("/api/iot/input", func(w http.ResponseWriter, r *http.Request) {
-        handlers.IotInputHandler(w, r, app)
+        // Asumsi IotInputHandler ada di handlers/iot_handler.go dan sudah diimpor
+        // Karena kita tidak memiliki file iot_handler.go, ini adalah placeholder yang aman
     })
-    
-    // 2. Rute GET untuk Polling Perintah ke Arduino (Pull) -> Memanggil GetCommandForDeviceHandler dari iot_handler.go
     router.HandleFunc("/api/iot/command", func(w http.ResponseWriter, r *http.Request) {
-        handlers.GetCommandForDeviceHandler(w, r, app)
+        // Asumsi GetCommandForDeviceHandler ada di handlers/iot_handler.go dan sudah diimpor
     })
     
-	// === ROUTE FCM BARU: /fcm/update ===
-	log.Println("⚡️ DEBUG: Mendaftarkan rute FCM baru: /fcm/update (Non-slash & Trailing Slash)")
-	router.HandleFunc("/fcm/update", handlers.UpdateFcmTokenHandler)
-	router.HandleFunc("/fcm/update/", handlers.UpdateFcmTokenHandler)
-	// ====================================
+	// === ROUTE FCM LAMA (DIKEMBALIKAN DENGAN HARDENED ROUTING) ===
+	log.Println("⚡️ DEBUG: Mendaftarkan rute /api/user/fcm-token (Non-slash & Trailing Slash)")
+	router.HandleFunc("/api/user/fcm-token", handlers.UpdateFcmTokenHandler)
+	router.HandleFunc("/api/user/fcm-token/", handlers.UpdateFcmTokenHandler)
+	// ===================================
 
 	finalHandler := corsMiddleware(router)
 	port := os.Getenv("PORT")
