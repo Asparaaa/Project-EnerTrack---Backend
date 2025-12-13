@@ -68,7 +68,13 @@ func main() {
 		sa = option.WithCredentialsFile("serviceAccountKey.json")
 	}
 
-	app, err := firebase.NewApp(ctx, nil, sa)
+    // 🔥 FIX 1: Konfigurasi Firebase untuk Realtime Database
+	conf := &firebase.Config{
+		// ⚠️ PASTIKAN URL INI SESUAI DENGAN REALTIME DB KAMU ⚠️
+		DatabaseURL: "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app/", 
+	}
+
+	app, err := firebase.NewApp(ctx, conf, sa) // Gunakan 'conf' di sini
 	if err != nil {
 		log.Printf("❌ Gagal init Firebase App: %v", err)
 	}
@@ -123,19 +129,27 @@ func main() {
     router.HandleFunc("/user/appliances/", handlers.GetApplianceByIDHandler)
     router.HandleFunc("/user/profile", handlers.UpdateUserProfileHandler)
     
-    // 🔥 ROUTE KHUSUS IOT 🔥
+    // 🔥 ROUTE KHUSUS IOT 🔥 (FIX 2: Implementasi Handler)
+    // 1. Rute POST untuk mengirim data dari Arduino (Push)
     router.HandleFunc("/api/iot/input", func(w http.ResponseWriter, r *http.Request) {
-        // Asumsi IotInputHandler ada di handlers/iot_handler.go dan sudah diimpor
-        // Karena kita tidak memiliki file iot_handler.go, ini adalah placeholder yang aman
-    })
-    router.HandleFunc("/api/iot/command", func(w http.ResponseWriter, r *http.Request) {
-        // Asumsi GetCommandForDeviceHandler ada di handlers/iot_handler.go dan sudah diimpor
+        handlers.IotInputHandler(w, r, app)
     })
     
-	// === ROUTE FCM LAMA (DIKEMBALIKAN DENGAN HARDENED ROUTING) ===
-	log.Println("⚡️ DEBUG: Mendaftarkan rute /api/user/fcm-token (Non-slash & Trailing Slash)")
-	router.HandleFunc("/api/user/fcm-token", handlers.UpdateFcmTokenHandler)
-	router.HandleFunc("/api/user/fcm-token/", handlers.UpdateFcmTokenHandler)
+    // 2. Rute GET untuk Polling Perintah ke Arduino (Pull)
+    router.HandleFunc("/api/iot/command", func(w http.ResponseWriter, r *http.Request) {
+        handlers.GetCommandForDeviceHandler(w, r, app)
+    })
+    
+    // 3. Rute GET untuk Sinkronisasi RTDB ke Firestore
+    log.Println("⚡️ DEBUG: Mendaftarkan rute sinkronisasi RTDB ke Firestore: /api/rtdb/sync")
+    router.HandleFunc("/api/rtdb/sync", func(w http.ResponseWriter, r *http.Request) {
+        handlers.RealtimeDBToFirestoreHandler(w, r, app)
+    })
+    
+	// === ROUTE FCM FINAL: Menggunakan Path Root Sederhana /update-token ===
+	log.Println("⚡️ DEBUG: Mendaftarkan rute FCM final: /update-token (Non-slash & Trailing Slash)")
+	router.HandleFunc("/update-token", handlers.UpdateFcmTokenHandler)
+	router.HandleFunc("/update-token/", handlers.UpdateFcmTokenHandler)
 	// ===================================
 
 	finalHandler := corsMiddleware(router)
