@@ -129,7 +129,7 @@ func main() {
     router.HandleFunc("/user/appliances/", handlers.GetApplianceByIDHandler)
     router.HandleFunc("/user/profile", handlers.UpdateUserProfileHandler)
     router.HandleFunc("/api/iot/input", func(w http.ResponseWriter, r *http.Request) {
-        // Asumsi IotInputHandler sudah ada
+        handlers.IotInputHandler(w, r, app)
     })
 
 
