@@ -27,6 +27,9 @@ func corsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 
+		// Menambahkan log di sini untuk setiap request yang masuk (opsional, tapi membantu debug)
+		log.Printf("Incoming Request: %s %s", r.Method, r.URL.Path)
+
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
