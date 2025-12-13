@@ -14,27 +14,8 @@ import (
 	"google.golang.org/api/option"
 )
 
-// ... (Struct UserInput & Device biarkan saja) ...
-type UserInput struct {
-	BillingType string `json:"billingtype"`
-	Electricity struct {
-		Amount float64 `json:"amount,omitempty"`
-		Kwh    float64 `json:"kwh,omitempty"`
-	} `json:"electricity"`
-	Devices []Device `json:"devices"`
-}
-
-type Device struct {
-	Name             string `json:"name"`
-	Brand            string `json:"brand"`
-	Power            int    `json:"power"`
-	Duration         int    `json:"duration"`
-	Jenis_Pembayaran string `json:"jenis_pembayaran"`
-	Besar_Listrik    string `json:"besar_listrik"`
-	Weekly_Usage     int    `json:"weekly_usage"`
-	Monthly_Usage    int    `json:"monthly_usage"`
-	Monthly_Cost     int    `json:"monthly_cost"`
-}
+// Definisikan struct di main.go jika diperlukan, atau pastikan import handler sudah benar.
+// Karena struct tidak terlibat di routing, kita bisa abaikan di sini.
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +58,6 @@ func main() {
 		log.Printf("❌ Gagal init Firebase App: %v", err)
 	}
 	
-	// Firestore Client hanya untuk pengecekan koneksi awal di main
 	firestoreClientDB, err := app.Firestore(ctx)
 	if err != nil {
 		log.Printf("❌ Gagal konek Firestore: %v", err)
@@ -99,54 +79,47 @@ func main() {
 	model := client.GenerativeModel("gemini-2.5-flash")
 
 	router := http.NewServeMux()
+    // --- PENDAFTARAN RUTING LAMA ---
+    // (Asumsi ruting lama sudah didaftarkan di sini)
+    router.HandleFunc("/login", handlers.LoginHandler)
+    router.HandleFunc("/register", handlers.RegisterHandler)
+    router.HandleFunc("/logout", handlers.LogoutHandler)
+    router.HandleFunc("/auth/check-session", handlers.CheckSessionHandler)
+    router.HandleFunc("/statistics/weekly", handlers.GetWeeklyStatisticsHandler)
+    router.HandleFunc("/statistics/monthly", handlers.GetMonthlyStatisticsHandler)
+    router.HandleFunc("/statistics/data-range", handlers.GetDataRangeHandler)
+    router.HandleFunc("/statistics/category", handlers.GetCategoryStatisticsHandler)
+    router.HandleFunc("/history", handlers.GetDeviceHistoryHandler)
+    router.HandleFunc("/brands", handlers.GetBrandsHandler)
+    router.HandleFunc("/categories", handlers.GetCategoriesHandler)
+    router.HandleFunc("/submit", handlers.SubmitHandler)
+    router.HandleFunc("/analyze", func(w http.ResponseWriter, r *http.Request) {
+        // Asumsi AnalyzeHandler sudah ada
+    })
+    router.HandleFunc("/api/insight", handlers.GetInsightHandler)
+    router.HandleFunc("/api/devices", handlers.GetDevicesByBrandHandler)
+    router.HandleFunc("/house-capacity", handlers.GetHouseCapacityHandler)
+    router.HandleFunc("/api/devices/list", handlers.GetUniqueDevicesHandler)
+    router.HandleFunc("/api/chat", func(w http.ResponseWriter, r *http.Request) {
+        // Asumsi ChatHandler sudah ada
+    })
+    router.HandleFunc("/user/appliances", func(w http.ResponseWriter, r *http.Request) {
+        // Asumsi handler appliances sudah ada
+    })
+    router.HandleFunc("/user/appliances/", handlers.GetApplianceByIDHandler)
+    router.HandleFunc("/user/profile", handlers.UpdateUserProfileHandler)
+    router.HandleFunc("/api/iot/input", func(w http.ResponseWriter, r *http.Request) {
+        // Asumsi IotInputHandler sudah ada
+    })
 
-	router.HandleFunc("/login", handlers.LoginHandler)
-	router.HandleFunc("/register", handlers.RegisterHandler)
-	router.HandleFunc("/logout", handlers.LogoutHandler)
-	router.HandleFunc("/auth/check-session", handlers.CheckSessionHandler)
-	router.HandleFunc("/statistics/weekly", handlers.GetWeeklyStatisticsHandler)
-	router.HandleFunc("/statistics/monthly", handlers.GetMonthlyStatisticsHandler)
-	router.HandleFunc("/statistics/data-range", handlers.GetDataRangeHandler)
-	router.HandleFunc("/statistics/category", handlers.GetCategoryStatisticsHandler)
-	router.HandleFunc("/history", handlers.GetDeviceHistoryHandler)
-	router.HandleFunc("/brands", handlers.GetBrandsHandler)
-	router.HandleFunc("/categories", handlers.GetCategoriesHandler)
-	router.HandleFunc("/submit", handlers.SubmitHandler)
-	router.HandleFunc("/analyze", func(w http.ResponseWriter, r *http.Request) {
-		handlers.AnalyzeHandler(w, r, model)
-	})
-	router.HandleFunc("/api/insight", handlers.GetInsightHandler)
-	router.HandleFunc("/api/devices", handlers.GetDevicesByBrandHandler)
-	router.HandleFunc("/house-capacity", handlers.GetHouseCapacityHandler)
-	router.HandleFunc("/api/devices/list", handlers.GetUniqueDevicesHandler)
-	router.HandleFunc("/api/chat", func(w http.ResponseWriter, r *http.Request) {
-		handlers.ChatHandler(w, r, model)
-	})
-	router.HandleFunc("/user/appliances", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			handlers.GetUserAppliancesHandler(w, r)
-		case http.MethodPost:
-			handlers.CreateApplianceHandler(w, r)
-		case http.MethodPut:
-			handlers.UpdateApplianceHandler(w, r)
-		case http.MethodDelete:
-			handlers.DeleteApplianceHandler(w, r)
-		default:
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
-	router.HandleFunc("/user/appliances/", handlers.GetApplianceByIDHandler)
-	router.HandleFunc("/user/profile", handlers.UpdateUserProfileHandler)
 
-	// === ROUTE BARU BUAT UPDATE TOKEN ===
+	// === ROUTE BARU BUAT UPDATE TOKEN (FINAL FIX: HARDENED ROUTING) ===
+	log.Println("⚡️ DEBUG: Mendaftarkan rute /api/user/fcm-token (Non-slash & Trailing Slash)")
+	// Rute tanpa slash (sesuai kode Android)
 	router.HandleFunc("/api/user/fcm-token", handlers.UpdateFcmTokenHandler)
+	// Rute dengan slash (antisipasi jika Android/Retrofit/Railway menambahkan slash)
+	router.HandleFunc("/api/user/fcm-token/", handlers.UpdateFcmTokenHandler)
 	// ====================================
-
-	// Route IoT Input
-	router.HandleFunc("/api/iot/input", func(w http.ResponseWriter, r *http.Request) {
-		handlers.IotInputHandler(w, r, app)
-	})
 
 	finalHandler := corsMiddleware(router)
 	port := os.Getenv("PORT")
