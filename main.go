@@ -39,6 +39,23 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// Handler sementara untuk /user/appliances yang menjamin respons JSON array kosong
+func TemporaryUserAppliancesHandler(w http.ResponseWriter, r *http.Request) {
+    // Ini hanya placeholder untuk mencegah EOFException di Android jika data kosong.
+    // Jika ada handler asli, pastikan handler asli mengembalikan JSON array ([]).
+    if r.Method != http.MethodGet {
+        w.WriteHeader(http.StatusMethodNotAllowed)
+        return
+    }
+    
+    // Pastikan mengembalikan JSON array kosong: []
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusOK)
+    w.Write([]byte("[]"))
+    log.Println("✅ Responed to /user/appliances with empty JSON array [].")
+}
+
+
 func main() {
 	db.InitDB()
 	defer db.DB.Close()
@@ -106,14 +123,9 @@ func main() {
     router.HandleFunc("/house-capacity", handlers.GetHouseCapacityHandler)
     router.HandleFunc("/api/devices/list", handlers.GetUniqueDevicesHandler)
     
-    // FIX: Gunakan variabel 'model' di sini
-    router.HandleFunc("/api/chat", func(w http.ResponseWriter, r *http.Request) {
-        handlers.ChatHandler(w, r, model)
-    })
-    
-    router.HandleFunc("/user/appliances", func(w http.ResponseWriter, r *http.Request) {
-        // Asumsi handler appliances sudah ada
-    })
+    // FIX: Menggunakan handler sementara untuk /user/appliances
+    router.HandleFunc("/user/appliances", TemporaryUserAppliancesHandler)
+
     router.HandleFunc("/user/appliances/", handlers.GetApplianceByIDHandler)
     router.HandleFunc("/user/profile", handlers.UpdateUserProfileHandler)
     router.HandleFunc("/api/iot/input", func(w http.ResponseWriter, r *http.Request) {
@@ -121,12 +133,12 @@ func main() {
     })
 
 
-	// === ROUTE BARU BUAT UPDATE TOKEN (FINAL FIX: HARDENED ROUTING) ===
-	log.Println("⚡️ DEBUG: Mendaftarkan rute /api/user/fcm-token (Non-slash & Trailing Slash)")
+	// === ROUTE FCM BARU: /fcm/update ===
+	log.Println("⚡️ DEBUG: Mendaftarkan rute FCM baru: /fcm/update (Non-slash & Trailing Slash)")
 	// Rute tanpa slash (sesuai kode Android)
-	router.HandleFunc("/api/user/fcm-token", handlers.UpdateFcmTokenHandler)
+	router.HandleFunc("/fcm/update", handlers.UpdateFcmTokenHandler)
 	// Rute dengan slash (antisipasi jika Android/Retrofit/Railway menambahkan slash)
-	router.HandleFunc("/api/user/fcm-token/", handlers.UpdateFcmTokenHandler)
+	router.HandleFunc("/fcm/update/", handlers.UpdateFcmTokenHandler)
 	// ====================================
 
 	finalHandler := corsMiddleware(router)
