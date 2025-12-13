@@ -71,7 +71,7 @@ func main() {
     // 🔥 FIX 1: Konfigurasi Firebase untuk Realtime Database
 	conf := &firebase.Config{
 		// ⚠️ PASTIKAN URL INI SESUAI DENGAN REALTIME DB KAMU ⚠️
-		DatabaseURL: "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app/", 
+		DatabaseURL: "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app/sensor.json", 
 	}
 
 	app, err := firebase.NewApp(ctx, conf, sa) // Gunakan 'conf' di sini
