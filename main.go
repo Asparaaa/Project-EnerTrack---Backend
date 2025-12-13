@@ -80,7 +80,6 @@ func main() {
 
 	router := http.NewServeMux()
     // --- PENDAFTARAN RUTING LAMA ---
-    // (Asumsi ruting lama sudah didaftarkan di sini)
     router.HandleFunc("/login", handlers.LoginHandler)
     router.HandleFunc("/register", handlers.RegisterHandler)
     router.HandleFunc("/logout", handlers.LogoutHandler)
@@ -93,16 +92,22 @@ func main() {
     router.HandleFunc("/brands", handlers.GetBrandsHandler)
     router.HandleFunc("/categories", handlers.GetCategoriesHandler)
     router.HandleFunc("/submit", handlers.SubmitHandler)
+    
+    // FIX: Gunakan variabel 'model' di sini
     router.HandleFunc("/analyze", func(w http.ResponseWriter, r *http.Request) {
-        // Asumsi AnalyzeHandler sudah ada
+        handlers.AnalyzeHandler(w, r, model) 
     })
+    
     router.HandleFunc("/api/insight", handlers.GetInsightHandler)
     router.HandleFunc("/api/devices", handlers.GetDevicesByBrandHandler)
     router.HandleFunc("/house-capacity", handlers.GetHouseCapacityHandler)
     router.HandleFunc("/api/devices/list", handlers.GetUniqueDevicesHandler)
+    
+    // FIX: Gunakan variabel 'model' di sini
     router.HandleFunc("/api/chat", func(w http.ResponseWriter, r *http.Request) {
-        // Asumsi ChatHandler sudah ada
+        handlers.ChatHandler(w, r, model)
     })
+    
     router.HandleFunc("/user/appliances", func(w http.ResponseWriter, r *http.Request) {
         // Asumsi handler appliances sudah ada
     })
