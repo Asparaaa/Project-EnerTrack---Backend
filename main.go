@@ -168,9 +168,9 @@ func main() {
 		handlers.AnalyzeHandler(w, r, model)
 	})
 
-	// === [PERBAIKAN] ROUTE AI CHAT (INI YANG KEMAREN HILANG!) ===
-	// Kita daftarkan di "/chat" agar sesuai dengan ApiService Android
-	router.HandleFunc("/chat", func(w http.ResponseWriter, r *http.Request) {
+	// === [PERBAIKAN] ROUTE AI CHAT ===
+	// Kita ubah jadi "/api/chat" karena di Logcat Android kamu requestnya ke sana!
+	router.HandleFunc("/api/chat", func(w http.ResponseWriter, r *http.Request) {
 		handlers.ChatHandler(w, r, model)
 	})
 
