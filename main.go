@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time" // <-- DITAMBAHKAN untuk scheduler interval
 
 	"EnerTrack-BE/db"
 	"EnerTrack-BE/handlers" // Pastikan package handlers diimpor
@@ -77,6 +78,7 @@ func main() {
 	app, err := firebase.NewApp(ctx, conf, sa) // Gunakan 'conf' di sini
 	if err != nil {
 		log.Printf("❌ Gagal init Firebase App: %v", err)
+        // Lanjutkan agar server tetap berjalan jika Firebase opsional
 	}
 	
 	firestoreClientDB, err := app.Firestore(ctx)
@@ -85,6 +87,20 @@ func main() {
 	} else {
 		defer firestoreClientDB.Close()
 	}
+    
+    // =================================================================
+    // 🔥 PENTING: MENJALANKAN SCHEDULER INTERNAL DI BACKGROUND
+    // =================================================================
+    
+    // !!! GANTI NILAI INI DENGAN USER ID DAN DEVICE LABEL YANG BENAR !!!
+    const targetUserID = 16 
+    const targetDevice = "Sensor Utama" 
+    const syncInterval = 5 * time.Minute // Sinkronisasi setiap 5 menit
+    
+    if app != nil {
+        handlers.StartInternalScheduler(app, targetUserID, targetDevice, syncInterval)
+    }
+    // =================================================================
 
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
@@ -141,7 +157,7 @@ func main() {
     })
     
     // 3. Rute GET untuk Sinkronisasi RTDB ke Firestore
-    log.Println("⚡️ DEBUG: Mendaftarkan rute sinkronisasi RTDB ke Firestore: /api/rtdb/sync")
+    log.Println("⚡️ DEBUG: Mendaftarkan rute sinkronisasi RTDB ke Firestore: /api/rtdb/sync (Sekarang Opsional)")
     router.HandleFunc("/api/rtdb/sync", func(w http.ResponseWriter, r *http.Request) {
         handlers.RealtimeDBToFirestoreHandler(w, r, app)
     })
