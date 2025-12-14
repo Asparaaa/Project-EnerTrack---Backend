@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	// Import DB untuk ambil token user
 	"EnerTrack-BE/db"
 
 	"cloud.google.com/go/firestore"
@@ -137,31 +136,67 @@ func processDataToFirestore(w http.ResponseWriter, app *firebase.App, data SyncD
 	}
 	defer firestoreClient.Close()
 
-	// 1. CEK BAHAYA & KIRIM NOTIFIKASI DINAMIS
-	// Ambang batas voltase bisa disesuaikan (misal > 250V)
-	if data.Voltase > 250 {
-		log.Printf("⚠️ BAHAYA TERDETEKSI: %.1f V pada User %d", data.Voltase, data.UserID)
-		
-		// Ambil token asli dari database MySQL
-		userToken := getUserFcmTokenFromDB(data.UserID)
-		
-		if userToken != "" {
-			sendNotification(ctx, app, userToken, "Bahaya Voltase Tinggi!", 
-				fmt.Sprintf("Perangkat %s mendeteksi %.1f V. Segera cek!", data.DeviceLabel, data.Voltase))
-		} else {
-			log.Printf("❌ Tidak bisa kirim notif: Token FCM untuk User %d tidak ditemukan di DB.", data.UserID)
-		}
-	}
-
-	// 2. Simpan ke Firestore
 	docID := fmt.Sprintf("user%d_%s", data.UserID, strings.ReplaceAll(data.DeviceLabel, " ", "_"))
 	docRef := firestoreClient.Collection("monitoring_live").Doc(docID)
 
+	// Status Baru
 	statusDevice := "ON"
 	if data.Watt == 0 {
 		statusDevice = "OFF"
 	}
 
+	// Cek Status Lama di Firestore (untuk logika notifikasi perubahan)
+	var previousStatus string = "UNKNOWN"
+	
+	snap, err := docRef.Get(ctx)
+	if err == nil && snap.Exists() {
+		oldData := snap.Data()
+		if status, ok := oldData["status"].(string); ok {
+			previousStatus = status
+		}
+	}
+
+	// --- LOGIKA NOTIFIKASI (ENGLISH) ---
+	// Ambil token dari DB hanya jika perlu kirim notifikasi
+	var userToken string
+	shouldNotify := false
+    var notifTitle string
+    var notifBody string
+
+	// Kondisi 1: Voltase Tinggi
+	if data.Voltase > 250 {
+		shouldNotify = true
+        notifTitle = "High Voltage Alert!"
+        notifBody = fmt.Sprintf("Device %s detected %.1f V. Check immediately!", data.DeviceLabel, data.Voltase)
+	}
+	
+    // Kondisi 2: Perangkat Mati (Transisi dari ON ke OFF)
+	// Kita pakai logika ini biar gak nyepam notif kalau alatnya mati terus
+	if previousStatus == "ON" && statusDevice == "OFF" {
+		shouldNotify = true
+        notifTitle = "Device Turned OFF"
+        notifBody = fmt.Sprintf("Device %s is now inactive (0 Watt).", data.DeviceLabel)
+	}
+
+    // Kondisi 3: Perangkat Nyala (Transisi dari OFF ke ON) - REQUEST BARU
+    if (previousStatus == "OFF" || previousStatus == "UNKNOWN") && statusDevice == "ON" {
+        shouldNotify = true
+        notifTitle = "Device Turned ON"
+        notifBody = fmt.Sprintf("Device %s is now active and consuming power.", data.DeviceLabel)
+    }
+
+	if shouldNotify {
+		userToken = getUserFcmTokenFromDB(data.UserID)
+		if userToken != "" {
+			log.Printf("🔔 Sending Notification: %s", notifTitle)
+			sendNotification(ctx, app, userToken, notifTitle, notifBody)
+		} else {
+			log.Printf("❌ Token not found for User %d", data.UserID)
+		}
+	}
+	// -----------------------------------
+
+	// Tulis ke Firestore (Tanpa kwh_total)
 	_, err = docRef.Set(ctx, map[string]interface{}{
 		"user_id":     data.UserID,
 		"device_name": data.DeviceLabel,
@@ -190,13 +225,9 @@ func processDataToFirestore(w http.ResponseWriter, app *firebase.App, data SyncD
 // Fungsi Bantu: Ambil Token dari MySQL
 func getUserFcmTokenFromDB(userID int) string {
 	var token string
-	// Query ke tabel users
 	query := "SELECT fcm_token FROM users WHERE user_id = ?"
-	
-	// db.DB diambil dari package "EnerTrack-BE/db"
 	err := db.DB.QueryRow(query, userID).Scan(&token)
 	if err != nil {
-		log.Printf("⚠️ Gagal ambil token dari DB: %v", err)
 		return ""
 	}
 	return token
@@ -211,12 +242,11 @@ func sendNotification(ctx context.Context, app *firebase.App, token, title, body
 	}
 
 	msg := &messaging.Message{
-		Token: token, // Token dinamis dari DB
+		Token: token, 
 		Notification: &messaging.Notification{
 			Title: title,
 			Body:  body,
 		},
-		// Tambahkan data payload biar bisa di-handle di background juga
 		Data: map[string]string{
 			"title": title,
 			"body":  body,
@@ -228,6 +258,6 @@ func sendNotification(ctx context.Context, app *firebase.App, token, title, body
 	if err != nil {
 		log.Printf("❌ Gagal kirim notif: %v", err)
 	} else {
-		log.Printf("✅ Notifikasi TERKIRIM ke token %s... ID: %s", token[:10], response)
+		log.Printf("✅ Notification sent to %s... ID: %s", token[:10], response)
 	}
 }
