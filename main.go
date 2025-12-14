@@ -130,7 +130,7 @@ func main() {
 	// =================================================================
 	// 🔥 PENTING: MENJALANKAN SCHEDULER INTERNAL (DINAMIS)
 	// =================================================================
-	const syncInterval = 1 * time.Minute
+	const syncInterval = 2 * time.Second
 	if app != nil {
 		handlers.StartInternalScheduler(app, syncInterval)
 	}
@@ -163,8 +163,15 @@ func main() {
 	router.HandleFunc("/categories", handlers.GetCategoriesHandler)
 	router.HandleFunc("/submit", handlers.SubmitHandler)
 
+	// === ROUTE AI ANALYZE (SUDAH ADA) ===
 	router.HandleFunc("/analyze", func(w http.ResponseWriter, r *http.Request) {
 		handlers.AnalyzeHandler(w, r, model)
+	})
+
+	// === [PERBAIKAN] ROUTE AI CHAT (INI YANG KEMAREN HILANG!) ===
+	// Kita daftarkan di "/chat" agar sesuai dengan ApiService Android
+	router.HandleFunc("/chat", func(w http.ResponseWriter, r *http.Request) {
+		handlers.ChatHandler(w, r, model)
 	})
 
 	router.HandleFunc("/api/insight", handlers.GetInsightHandler)
