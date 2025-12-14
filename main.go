@@ -69,11 +69,9 @@ func main() {
 		sa = option.WithCredentialsFile("serviceAccountKey.json")
 	}
 
-    // 🔥 PERBAIKAN: HANYA BERIKAN HOSTNAME DAN PROJECT ID
+    // 🔥 PERBAIKAN: Mengembalikan HTTPS:// untuk memperbaiki 'invalid URI'
 	conf := &firebase.Config{
-		// [PERBAIKAN KRITIS]: Hilangkan protokol HTTPS://
-        DatabaseURL: "enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app",
-        
+        DatabaseURL: "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app",
         ProjectID: "enertrack-test-default-rtdb", 
 	}
 
