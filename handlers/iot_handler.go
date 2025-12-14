@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io" // <-- DIKEMBALIKAN untuk membaca body HTTP
 	"log"
 	"net/http"
 	"strconv"
@@ -17,9 +18,12 @@ import (
 	"firebase.google.com/go/messaging"
 )
 
-// --- STRUKTUR DATA ---
+// --- KONFIGURASI REST API KHUSUS SCHEDULER ---
+// Karena Admin SDK Go bermasalah dengan URL regional, kita pakai REST API.
+const RTDB_REST_URL = "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app/sensor.json"
 
-// 1. Data Utama (Internal App)
+// --- STRUKTUR DATA (SAMA) ---
+
 type IotData struct {
 	UserID      int     `json:"user_id"`
 	DeviceLabel string  `json:"device_label"`
@@ -28,21 +32,18 @@ type IotData struct {
 	Watt        float64 `json:"watt"`
 }
 
-// 2. Data Respon Command (Untuk ESP32)
 type CommandResponse struct {
 	Status      string `json:"status"`
 	Command     string `json:"command"`
 	DeviceLabel string `json:"device_label"`
 }
 
-// 3. Data Mentah dari RTDB
 type RtdbSensorData struct {
 	Current float64 `json:"current"` // Ampere
 	Power   float64 `json:"power"`   // Watt
 	Voltage float64 `json:"voltage"` // Voltase
 }
 
-// 4. Data untuk Sync ke Firestore
 type SyncData struct {
 	UserID      int
 	DeviceLabel string
@@ -52,8 +53,7 @@ type SyncData struct {
 }
 
 // =================================================================
-// 0. CORE LOGIC: Sinkronisasi, Update Firestore, dan Notifikasi
-// Fungsi ini yang akan dipanggil oleh HTTP Handler dan Scheduler
+// 0. CORE LOGIC: Sinkronisasi, Update Firestore, dan Notifikasi (SAMA)
 // =================================================================
 func syncAndNotify(ctx context.Context, app *firebase.App, data SyncData) (status string, err error) {
 	firestoreClient, err := app.Firestore(ctx)
@@ -66,14 +66,11 @@ func syncAndNotify(ctx context.Context, app *firebase.App, data SyncData) (statu
 	docID := fmt.Sprintf("user%d_%s", data.UserID, strings.ReplaceAll(data.DeviceLabel, " ", "_"))
 	docRef := firestoreClient.Collection("monitoring_live").Doc(docID)
 
-	// --- LOGIKA STATUS BARU ---
 	statusDevice := "ON"
 	if data.Watt < 0.1 || data.Ampere < 0.01 || data.Voltase < 1.0 {
 		statusDevice = "OFF"
 	}
-	// --------------------------
 
-	// Cek Status Lama
 	var previousStatus string = "UNKNOWN"
 	snap, err := docRef.Get(ctx)
 	if err == nil && snap.Exists() {
@@ -83,12 +80,10 @@ func syncAndNotify(ctx context.Context, app *firebase.App, data SyncData) (statu
 		}
 	}
 
-	// --- LOGIKA NOTIFIKASI DINAMIS ---
 	shouldNotify := false
     var notifTitle string
     var notifBody string
 
-	// [Logika Notifikasi dipertahankan seperti sebelumnya]
 	if data.Voltase > 250 {
 		shouldNotify = true
         notifTitle = "High Voltage Alert!"
@@ -112,9 +107,7 @@ func syncAndNotify(ctx context.Context, app *firebase.App, data SyncData) (statu
 			log.Printf("❌ Token not found for User %d in DB", data.UserID)
 		}
 	}
-	// -----------------------------------
 
-	// Tulis ke Firestore
 	_, err = docRef.Set(ctx, map[string]interface{}{
 		"user_id":     data.UserID,
 		"device_name": data.DeviceLabel,
@@ -136,7 +129,7 @@ func syncAndNotify(ctx context.Context, app *firebase.App, data SyncData) (statu
 
 
 // =================================================================
-// 1. IOT INPUT HANDLER (POST - Direct Device Push)
+// 1. IOT INPUT HANDLER (POST - Direct Device Push) (SAMA)
 // =================================================================
 func IotInputHandler(w http.ResponseWriter, r *http.Request, app *firebase.App) {
 	if r.Method != http.MethodPost {
@@ -155,7 +148,6 @@ func IotInputHandler(w http.ResponseWriter, r *http.Request, app *firebase.App) 
         return
     }
 
-    // Panggil fungsi inti untuk menyimpan data
 	status, err := syncAndNotify(r.Context(), app, SyncData{
 		UserID:      data.UserID, 
 		DeviceLabel: data.DeviceLabel,
@@ -180,8 +172,7 @@ func IotInputHandler(w http.ResponseWriter, r *http.Request, app *firebase.App) 
 }
 
 // =================================================================
-// 2. GET COMMAND HANDLER (GET - Device Polling)
-// ... (Kode tetap sama)
+// 2. GET COMMAND HANDLER (GET - Device Polling) (SAMA)
 // =================================================================
 func GetCommandForDeviceHandler(w http.ResponseWriter, r *http.Request, app *firebase.App) {
 	if r.Method != http.MethodGet {
@@ -198,7 +189,7 @@ func GetCommandForDeviceHandler(w http.ResponseWriter, r *http.Request, app *fir
 
 // =================================================================
 // 3. REALTIME DB TO FIRESTORE HANDLER (GET - Sync)
-// Handler ini sekarang hanya mengambil data dan memanggil fungsi inti
+// Di sini kita kembali menggunakan Admin SDK (yang mungkin gagal)
 // =================================================================
 func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *firebase.App) {
 	if r.Method != http.MethodGet {
@@ -225,20 +216,34 @@ func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *f
         return
     }
 
-	// 2. Inisialisasi RTDB Client
-    rtdbClient, err := app.Database(ctx)
+	// 2. HTTP GET ke RTDB (Mengganti Admin SDK untuk handler ini juga)
+	client := http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(RTDB_REST_URL)
 	if err != nil {
-		log.Printf("❌ Gagal init RTDB Client: %v", err)
-		http.Error(w, "Error initializing RTDB client", http.StatusInternalServerError)
+		log.Printf("❌ Gagal HTTP GET ke RTDB: %v", err)
+		http.Error(w, "Error fetching RTDB", http.StatusInternalServerError)
 		return
 	}
-	
-	// 3. Ambil data dari path "sensor" di RTDB menggunakan Admin SDK
-	var rtdbData RtdbSensorData
-	err = rtdbClient.NewRef("sensor").Get(ctx, &rtdbData)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("❌ RTDB Error Status: %d", resp.StatusCode)
+		http.Error(w, "RTDB returns error", http.StatusBadGateway)
+		return
+	}
+
+	// 3. Baca & Decode JSON
+	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("❌ Gagal GET data dari RTDB (Admin SDK): %v", err)
-		http.Error(w, "Error fetching data from RTDB", http.StatusInternalServerError)
+		log.Printf("❌ Gagal baca body: %v", err)
+		http.Error(w, "Error reading body", http.StatusInternalServerError)
+		return
+	}
+
+	var rtdbData RtdbSensorData
+	if err := json.Unmarshal(bodyBytes, &rtdbData); err != nil {
+		log.Printf("❌ Gagal parsing JSON RTDB: %v", err)
+		http.Error(w, "Invalid JSON from RTDB", http.StatusInternalServerError)
 		return
 	}
 
@@ -260,7 +265,7 @@ func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *f
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "success",
-		"message": "Data synced",
+		"message": "Data synced via REST API",
 		"device":  deviceLabel,
 		"status_device": status,
 	})
@@ -269,12 +274,10 @@ func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *f
 
 // =================================================================
 // 4. SCHEDULER INTERNAL (Pengganti Google Cloud Scheduler)
+// Menggunakan HTTP GET Request (REST API) untuk koneksi RTDB.
 // =================================================================
 
-// StartInternalScheduler memulai goroutine yang memicu sinkronisasi RTDB->Firestore secara berkala.
-// Harus dipanggil sekali saat aplikasi Go kamu (main.go) pertama kali dijalankan.
 func StartInternalScheduler(app *firebase.App, syncUserID int, deviceLabel string, interval time.Duration) {
-    // Jalankan scheduler di goroutine background
     go func() {
         ticker := time.NewTicker(interval)
         defer ticker.Stop()
@@ -283,26 +286,38 @@ func StartInternalScheduler(app *firebase.App, syncUserID int, deviceLabel strin
         for {
             select {
             case <-ticker.C:
-                // Cek apakah UserID valid
                 if syncUserID > 0 {
-                    log.Println("--- Memicu Sinkronisasi Terjadwal ---")
-                    // Gunakan context baru dengan timeout untuk memastikan operasi tidak menggantung
+                    log.Println("--- Memicu Sinkronisasi Terjadwal (via REST API) ---")
                     ctx, cancel := context.WithTimeout(context.Background(), 15 * time.Second)
                     
-                    // 1. Inisialisasi RTDB Client
-                    rtdbClient, err := app.Database(ctx)
+                    // 1. HTTP GET ke RTDB (MENGGANTIKAN ADMIN SDK)
+                    client := http.Client{Timeout: 10 * time.Second}
+                    resp, err := client.Get(RTDB_REST_URL)
+                    
                     if err != nil {
-                        log.Printf("❌ [SCHEDULER] Gagal init RTDB Client: %v", err)
+                        log.Printf("❌ [SCHEDULER] Gagal HTTP GET ke RTDB: %v", err)
+                        cancel()
+                        continue
+                    }
+                    defer resp.Body.Close()
+
+                    if resp.StatusCode != http.StatusOK {
+                        log.Printf("❌ [SCHEDULER] RTDB Error Status: %d", resp.StatusCode)
                         cancel()
                         continue
                     }
 
-                    // 2. Ambil data dari path "sensor" di RTDB
-                    var rtdbData RtdbSensorData
-                    err = rtdbClient.NewRef("sensor").Get(ctx, &rtdbData)
-                    
+                    // 2. Baca & Decode JSON
+                    bodyBytes, err := io.ReadAll(resp.Body)
                     if err != nil {
-                        log.Printf("❌ [SCHEDULER] Gagal GET data dari RTDB: %v", err)
+                        log.Printf("❌ [SCHEDULER] Gagal baca body: %v", err)
+                        cancel()
+                        continue
+                    }
+
+                    var rtdbData RtdbSensorData
+                    if err := json.Unmarshal(bodyBytes, &rtdbData); err != nil {
+                        log.Printf("❌ [SCHEDULER] Gagal parsing JSON RTDB: %v", err)
                         cancel()
                         continue
                     }
@@ -327,10 +342,9 @@ func StartInternalScheduler(app *firebase.App, syncUserID int, deviceLabel strin
 
 
 // =================================================================
-// FUNGSI BANTU (Tidak diubah)
+// FUNGSI BANTU (TIDAK DIUBAH)
 // =================================================================
 
-// Fungsi Bantu: Ambil Token dari MySQL
 func getUserFcmTokenFromDB(userID int) string {
 	var token string
 	query := "SELECT fcm_token FROM users WHERE user_id = ?"
@@ -341,7 +355,6 @@ func getUserFcmTokenFromDB(userID int) string {
 	return token
 }
 
-// Fungsi Bantu: Kirim FCM
 func sendNotification(ctx context.Context, app *firebase.App, token, title, body string) {
 	client, err := app.Messaging(ctx)
 	if err != nil {
