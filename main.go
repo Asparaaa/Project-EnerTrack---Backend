@@ -95,7 +95,7 @@ func main() {
     // !!! GANTI NILAI INI DENGAN USER ID DAN DEVICE LABEL YANG BENAR !!!
     const targetUserID = 16 
     const targetDevice = "Sensor Utama" 
-    const syncInterval = 5 * time.Minute // Sinkronisasi setiap 5 menit
+    const syncInterval = 1 * time.Minute // Sinkronisasi setiap 5 menit
     
     if app != nil {
         handlers.StartInternalScheduler(app, targetUserID, targetDevice, syncInterval)
