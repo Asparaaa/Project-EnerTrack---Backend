@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,13 +19,13 @@ import (
 	"firebase.google.com/go/messaging"
 )
 
-// URL REST API RTDB
+// --- KONFIGURASI ---
+// URL REST API RTDB (Tanpa SDK, Gratis & Cepat)
 const RTDB_REST_URL = "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app/sensor.json"
 
-// ID User Default (Masih hardcode untuk simulasi, nanti bisa dinamis)
-const SYNC_USER_ID = 16
-
 // --- STRUKTUR DATA ---
+
+// 1. Data Utama (Internal App)
 type IotData struct {
 	UserID      int     `json:"user_id"`
 	DeviceLabel string  `json:"device_label"`
@@ -33,18 +34,21 @@ type IotData struct {
 	Watt        float64 `json:"watt"`
 }
 
+// 2. Data Respon Command (Untuk ESP32)
 type CommandResponse struct {
 	Status      string `json:"status"`
 	Command     string `json:"command"`
 	DeviceLabel string `json:"device_label"`
 }
 
+// 3. Data Mentah dari RTDB
 type RtdbSensorData struct {
-	Current float64 `json:"current"`
-	Power   float64 `json:"power"`
-	Voltage float64 `json:"voltage"`
+	Current float64 `json:"current"` // Ampere
+	Power   float64 `json:"power"`   // Watt
+	Voltage float64 `json:"voltage"` // Voltase
 }
 
+// 4. Data untuk Sync ke Firestore
 type SyncData struct {
 	UserID      int
 	DeviceLabel string
@@ -54,22 +58,30 @@ type SyncData struct {
 }
 
 // =================================================================
-// 1. IOT INPUT HANDLER (POST)
+// 1. IOT INPUT HANDLER (POST - Direct Device Push)
 // =================================================================
 func IotInputHandler(w http.ResponseWriter, r *http.Request, app *firebase.App) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, "Method not allowed, use POST", http.StatusMethodNotAllowed)
 		return
 	}
 
 	var data IotData
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		log.Printf("⚠️ Format JSON salah")
+		log.Printf("⚠️ Format JSON standar tidak cocok, cek format...")
 		return
 	}
 
+    // Validasi User ID
+    if data.UserID == 0 {
+        http.Error(w, "User ID is required", http.StatusBadRequest)
+        return
+    }
+
+	// Logic simpan ke Firestore (KwhTotal dihapus)
+    // Disini UserID diambil DARI DATA JSON, bukan hardcode.
 	processDataToFirestore(w, app, SyncData{
-		UserID:      data.UserID,
+		UserID:      data.UserID, 
 		DeviceLabel: data.DeviceLabel,
 		Voltase:     data.Voltase,
 		Ampere:      data.Ampere,
@@ -78,60 +90,105 @@ func IotInputHandler(w http.ResponseWriter, r *http.Request, app *firebase.App) 
 }
 
 // =================================================================
-// 2. GET COMMAND HANDLER
+// 2. GET COMMAND HANDLER (GET - Device Polling)
 // =================================================================
 func GetCommandForDeviceHandler(w http.ResponseWriter, r *http.Request, app *firebase.App) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	json.NewEncoder(w).Encode(CommandResponse{Status: "success", Command: "NONE"})
+
+	resp := CommandResponse{
+		Status:  "success",
+		Command: "NONE",
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 // =================================================================
-// 3. REALTIME DB TO FIRESTORE HANDLER (SYNC)
+// 3. REALTIME DB TO FIRESTORE HANDLER (GET - Sync)
 // =================================================================
 func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *firebase.App) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, "Method not allowed, use GET", http.StatusMethodNotAllowed)
 		return
 	}
 
+	// 1. Ambil Parameter Device Label DAN User ID
 	query := r.URL.Query()
 	deviceLabel := query.Get("device_label")
+    userIDStr := query.Get("user_id")
+
 	if deviceLabel == "" {
 		deviceLabel = "Default Meter"
+		log.Println("⚠️ Param 'device_label' kosong. Menggunakan default.")
 	}
 
+    // Default User ID jika tidak ada di query (misal untuk testing lama)
+    // Tapi sebaiknya diisi di query: ?user_id=16&device_label=...
+    syncUserID := 0 
+    if userIDStr != "" {
+        if id, err := strconv.Atoi(userIDStr); err == nil {
+            syncUserID = id
+        }
+    }
+    
+    if syncUserID == 0 {
+        http.Error(w, "Parameter 'user_id' is required for sync", http.StatusBadRequest)
+        return
+    }
+
+	// 2. HTTP GET ke RTDB
 	client := http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(RTDB_REST_URL)
 	if err != nil {
+		log.Printf("❌ Gagal GET ke RTDB: %v", err)
 		http.Error(w, "Error fetching RTDB", http.StatusInternalServerError)
 		return
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	var rtdbData RtdbSensorData
-	json.Unmarshal(bodyBytes, &rtdbData)
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("❌ RTDB Error Status: %d", resp.StatusCode)
+		http.Error(w, "RTDB returns error", http.StatusBadGateway)
+		return
+	}
 
+	// 3. Baca & Decode JSON
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("❌ Gagal baca body: %v", err)
+		http.Error(w, "Error reading body", http.StatusInternalServerError)
+		return
+	}
+
+	var rtdbData RtdbSensorData
+	if err := json.Unmarshal(bodyBytes, &rtdbData); err != nil {
+		log.Printf("❌ Gagal parsing JSON RTDB: %v", err)
+		http.Error(w, "Invalid JSON from RTDB", http.StatusInternalServerError)
+		return
+	}
+
+	// 4. Siapkan Data
 	syncData := SyncData{
-		UserID:      SYNC_USER_ID,
+		UserID:      syncUserID, // Pake ID dari query param
 		DeviceLabel: deviceLabel,
 		Voltase:     rtdbData.Voltage,
 		Ampere:      rtdbData.Current,
 		Watt:        rtdbData.Power,
 	}
 
+	// 5. Proses Simpan
 	processDataToFirestore(w, app, syncData)
 }
 
-// --- LOGIKA UTAMA UPDATE & NOTIFIKASI ---
+// Fungsi Helper Update Firestore & Notifikasi
 func processDataToFirestore(w http.ResponseWriter, app *firebase.App, data SyncData) {
 	ctx := context.Background()
 	firestoreClient, err := app.Firestore(ctx)
 	if err != nil {
-		http.Error(w, "Firestore Error", http.StatusInternalServerError)
+		log.Printf("❌ Gagal init Firestore: %v", err)
+		http.Error(w, "Firestore Init Error", http.StatusInternalServerError)
 		return
 	}
 	defer firestoreClient.Close()
@@ -139,20 +196,15 @@ func processDataToFirestore(w http.ResponseWriter, app *firebase.App, data SyncD
 	docID := fmt.Sprintf("user%d_%s", data.UserID, strings.ReplaceAll(data.DeviceLabel, " ", "_"))
 	docRef := firestoreClient.Collection("monitoring_live").Doc(docID)
 
-	// --- PERBAIKAN LOGIKA STATUS (REQUEST USER) ---
-	// Status Baru Default
+	// --- LOGIKA STATUS BARU (STRICT) ---
 	statusDevice := "ON"
-	
-	// Jika SALAH SATU dari parameter listrik mati/nol (Voltase, Ampere, atau Watt),
-	// maka status dianggap OFF. Kita pakai ambang batas kecil untuk antisipasi noise.
 	if data.Watt < 0.1 || data.Ampere < 0.01 || data.Voltase < 1.0 {
 		statusDevice = "OFF"
 	}
-	// ---------------------------------------------
+	// -----------------------------------
 
-	// Cek Status Lama di Firestore (untuk logika notifikasi perubahan)
+	// Cek Status Lama
 	var previousStatus string = "UNKNOWN"
-	
 	snap, err := docRef.Get(ctx)
 	if err == nil && snap.Exists() {
 		oldData := snap.Data()
@@ -161,47 +213,45 @@ func processDataToFirestore(w http.ResponseWriter, app *firebase.App, data SyncD
 		}
 	}
 
-	// --- LOGIKA NOTIFIKASI (ENGLISH) ---
-	// Ambil token dari DB hanya jika perlu kirim notifikasi
-	var userToken string
+	// --- LOGIKA NOTIFIKASI DINAMIS ---
 	shouldNotify := false
-	var notifTitle string
-	var notifBody string
+    var notifTitle string
+    var notifBody string
 
 	// Kondisi 1: Voltase Tinggi
 	if data.Voltase > 250 {
 		shouldNotify = true
-		notifTitle = "High Voltage Alert!"
-		notifBody = fmt.Sprintf("Device %s detected %.1f V. Check immediately!", data.DeviceLabel, data.Voltase)
+        notifTitle = "High Voltage Alert!"
+        notifBody = fmt.Sprintf("Device %s detected %.1f V. Check immediately!", data.DeviceLabel, data.Voltase)
 	}
 	
-	// Kondisi 2: Perangkat Mati (Transisi dari ON ke OFF)
-	// Kita pakai logika ini biar gak nyepam notif kalau alatnya mati terus
+    // Kondisi 2: Device OFF
 	if previousStatus == "ON" && statusDevice == "OFF" {
 		shouldNotify = true
-		notifTitle = "Device Turned OFF"
-		notifBody = fmt.Sprintf("Device %s is now inactive (0 Watt/Amp/Volt).", data.DeviceLabel)
+        notifTitle = "Device Turned OFF"
+        notifBody = fmt.Sprintf("Device %s is now inactive (0 Watt/Amp/Volt).", data.DeviceLabel)
 	}
 
-	// Kondisi 3: Perangkat Nyala (Transisi dari OFF ke ON)
-	if (previousStatus == "OFF" || previousStatus == "UNKNOWN") && statusDevice == "ON" {
-		shouldNotify = true
-		notifTitle = "Device Turned ON"
-		notifBody = fmt.Sprintf("Device %s is now active and consuming power.", data.DeviceLabel)
-	}
+    // Kondisi 3: Device ON
+    if (previousStatus == "OFF" || previousStatus == "UNKNOWN") && statusDevice == "ON" {
+        shouldNotify = true
+        notifTitle = "Device Turned ON"
+        notifBody = fmt.Sprintf("Device %s is now active.", data.DeviceLabel)
+    }
 
 	if shouldNotify {
-		userToken = getUserFcmTokenFromDB(data.UserID)
+        // Ambil token dari DB sesuai UserID yang dikirim
+		userToken := getUserFcmTokenFromDB(data.UserID)
 		if userToken != "" {
-			log.Printf("🔔 Sending Notification: %s", notifTitle)
+			log.Printf("🔔 Sending Notification to User %d: %s", data.UserID, notifTitle)
 			sendNotification(ctx, app, userToken, notifTitle, notifBody)
 		} else {
-			log.Printf("❌ Token not found for User %d", data.UserID)
+			log.Printf("❌ Token not found for User %d in DB", data.UserID)
 		}
 	}
 	// -----------------------------------
 
-	// Tulis ke Firestore (Tanpa kwh_total)
+	// Tulis ke Firestore
 	_, err = docRef.Set(ctx, map[string]interface{}{
 		"user_id":     data.UserID,
 		"device_name": data.DeviceLabel,
@@ -213,6 +263,7 @@ func processDataToFirestore(w http.ResponseWriter, app *firebase.App, data SyncD
 	}, firestore.MergeAll)
 
 	if err != nil {
+		log.Printf("❌ Gagal update Firestore: %v", err)
 		http.Error(w, "Firestore Write Error", http.StatusInternalServerError)
 		return
 	}
@@ -221,17 +272,19 @@ func processDataToFirestore(w http.ResponseWriter, app *firebase.App, data SyncD
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "success",
-		"message": "Data synced & Checked for Alert",
+		"message": "Data synced",
 		"device":  data.DeviceLabel,
-		"power":   data.Watt,
 		"status_device": statusDevice,
 	})
+	log.Printf("✅ Sync Sukses User %d: %s | Status: %s", data.UserID, docID, statusDevice)
 }
 
 // Fungsi Bantu: Ambil Token dari MySQL
 func getUserFcmTokenFromDB(userID int) string {
 	var token string
 	query := "SELECT fcm_token FROM users WHERE user_id = ?"
+    // Pastikan EnerTrack-BE/db sudah diimport dengan benar (bukan blank import _) 
+    // jika ingin ini jalan. Jika masih error import, uncomment baris bawah.
 	err := db.DB.QueryRow(query, userID).Scan(&token)
 	if err != nil {
 		return ""
