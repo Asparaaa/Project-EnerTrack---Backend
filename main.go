@@ -69,10 +69,11 @@ func main() {
 		sa = option.WithCredentialsFile("serviceAccountKey.json")
 	}
 
-    // 🔥 PERBAIKAN: Mengembalikan HTTPS:// untuk memperbaiki 'invalid URI'
+    // 🔥 PERBAIKAN: Project ID harus sesuai dengan Google Cloud Project ID (bukan nama DB)
 	conf := &firebase.Config{
         DatabaseURL: "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app",
-        ProjectID: "enertrack-test-default-rtdb", 
+        // [PERBAIKAN KRITIS]: Mengganti ke Project ID yang benar (dari email Service Account)
+        ProjectID: "enertrack-test", 
 	}
 
 	app, err := firebase.NewApp(ctx, conf, sa) 
@@ -169,7 +170,6 @@ func main() {
 
 	finalHandler := corsMiddleware(router)
 	port := os.Getenv("PORT")
-    // [PERBAIKAN KRITIS]: Mengganti operator assignment (=) menjadi perbandingan (==)
 	if port == "" { 
 		port = "8000"
 	}
