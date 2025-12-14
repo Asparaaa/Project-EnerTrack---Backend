@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"time" // <-- DITAMBAHKAN untuk scheduler interval
+	"time"
 
 	"EnerTrack-BE/db"
 	"EnerTrack-BE/handlers" // Pastikan package handlers diimpor
@@ -69,16 +69,19 @@ func main() {
 		sa = option.WithCredentialsFile("serviceAccountKey.json")
 	}
 
-    // 🔥 PERBAIKAN: URL Realtime DB harus URL root, tanpa /sensor.json atau spasi di belakang
+    // 🔥 PERBAIKAN: FIX URL REGIONAL RTDB (KONFIGURASI PALING DASAR)
 	conf := &firebase.Config{
-		// URL Realtime Database yang BENAR (Hanya root URL)
-		DatabaseURL: "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app", 
+		// [PERBAIKAN KRITIS]: Hapus field yang menyebabkan error. 
+        // Admin SDK akan menggunakan URL ini untuk koneksi RTDB.
+        DatabaseURL: "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app",
+        
+        // ProjectID tetap harus ada
+        ProjectID: "enertrack-test-default-rtdb", 
 	}
 
-	app, err := firebase.NewApp(ctx, conf, sa) // Gunakan 'conf' di sini
+	app, err := firebase.NewApp(ctx, conf, sa) 
 	if err != nil {
 		log.Printf("❌ Gagal init Firebase App: %v", err)
-        // Lanjutkan agar server tetap berjalan jika Firebase opsional
 	}
 	
 	firestoreClientDB, err := app.Firestore(ctx)
@@ -95,7 +98,7 @@ func main() {
     // !!! GANTI NILAI INI DENGAN USER ID DAN DEVICE LABEL YANG BENAR !!!
     const targetUserID = 16 
     const targetDevice = "Sensor Utama" 
-    const syncInterval = 1 * time.Minute // Sinkronisasi setiap 5 menit
+    const syncInterval = 1 * time.Minute // Sinkronisasi setiap 1 menit (untuk testing)
     
     if app != nil {
         handlers.StartInternalScheduler(app, targetUserID, targetDevice, syncInterval)
