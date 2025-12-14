@@ -8,14 +8,12 @@ import (
 	"time"
 
 	"EnerTrack-BE/db"
-	"EnerTrack-BE/handlers" // Pastikan package handlers diimpor
+	"EnerTrack-BE/handlers"
 
 	firebase "firebase.google.com/go"
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
 )
-
-// Definisikan struct di main.go jika diperlukan, atau pastikan import handler sudah benar.
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -38,19 +36,15 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// Handler sementara untuk /user/appliances yang menjamin respons JSON array kosong
 func TemporaryUserAppliancesHandler(w http.ResponseWriter, r *http.Request) {
     if r.Method != http.MethodGet {
         w.WriteHeader(http.StatusMethodNotAllowed)
         return
     }
-    
     w.Header().Set("Content-Type", "application/json")
     w.WriteHeader(http.StatusOK)
     w.Write([]byte("[]"))
-    log.Println("✅ Responed to /user/appliances with empty JSON array [].")
 }
-
 
 func main() {
 	db.InitDB()
@@ -59,7 +53,7 @@ func main() {
 	// --- SETUP FIREBASE ---
 	firebaseCreds := os.Getenv("FIREBASE_CREDENTIALS")
 	ctx := context.Background()
-	var sa option.ClientOption
+	var sa option.ClientOption	
 
 	if firebaseCreds != "" {
 		log.Println("✅ FIREBASE_CREDENTIALS ditemukan")
@@ -69,10 +63,8 @@ func main() {
 		sa = option.WithCredentialsFile("serviceAccountKey.json")
 	}
 
-    // 🔥 PERBAIKAN: Project ID harus sesuai dengan Google Cloud Project ID (bukan nama DB)
 	conf := &firebase.Config{
         DatabaseURL: "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app",
-        // [PERBAIKAN KRITIS]: Mengganti ke Project ID yang benar (dari email Service Account)
         ProjectID: "enertrack-test", 
 	}
 
@@ -89,16 +81,16 @@ func main() {
 	}
     
     // =================================================================
-    // 🔥 PENTING: MENJALANKAN SCHEDULER INTERNAL DI BACKGROUND
+    // 🔥 PENTING: MENJALANKAN SCHEDULER INTERNAL (DINAMIS)
     // =================================================================
     
-    // !!! GANTI NILAI INI DENGAN USER ID DAN DEVICE LABEL YANG BENAR !!!
-    const targetUserID = 16 
-    const targetDevice = "Sensor Utama" 
-    const syncInterval = 5 * time.Second // Sinkronisasi setiap 1 menit (untuk testing)
+    // Tidak ada lagi hardcode User ID di sini!
+    // Scheduler akan mencari user aktif dari database sendiri.
+    const syncInterval = 2 * time.Second 
     
     if app != nil {
-        handlers.StartInternalScheduler(app, targetUserID, targetDevice, syncInterval)
+        // Cukup panggil fungsi tanpa parameter user ID
+        handlers.StartInternalScheduler(app, syncInterval)
     }
     // =================================================================
 
@@ -116,7 +108,6 @@ func main() {
 	model := client.GenerativeModel("gemini-2.5-flash")
 
 	router := http.NewServeMux()
-    // --- PENDAFTARAN RUTING LAINNYA ---
     router.HandleFunc("/login", handlers.LoginHandler)
     router.HandleFunc("/register", handlers.RegisterHandler)
     router.HandleFunc("/logout", handlers.LogoutHandler)
@@ -130,7 +121,6 @@ func main() {
     router.HandleFunc("/categories", handlers.GetCategoriesHandler)
     router.HandleFunc("/submit", handlers.SubmitHandler)
     
-    // Rute AI
     router.HandleFunc("/analyze", func(w http.ResponseWriter, r *http.Request) {
         handlers.AnalyzeHandler(w, r, model) 
     })
@@ -140,33 +130,24 @@ func main() {
     router.HandleFunc("/house-capacity", handlers.GetHouseCapacityHandler)
     router.HandleFunc("/api/devices/list", handlers.GetUniqueDevicesHandler)
     
-    // Rute Appliances & Profile
     router.HandleFunc("/user/appliances", TemporaryUserAppliancesHandler)
     router.HandleFunc("/user/appliances/", handlers.GetApplianceByIDHandler)
     router.HandleFunc("/user/profile", handlers.UpdateUserProfileHandler)
     
-    // 🔥 ROUTE KHUSUS IOT 🔥
-    // 1. Rute POST untuk mengirim data dari Arduino (Push)
     router.HandleFunc("/api/iot/input", func(w http.ResponseWriter, r *http.Request) {
         handlers.IotInputHandler(w, r, app)
     })
     
-    // 2. Rute GET untuk Polling Perintah ke Arduino (Pull)
     router.HandleFunc("/api/iot/command", func(w http.ResponseWriter, r *http.Request) {
         handlers.GetCommandForDeviceHandler(w, r, app)
     })
     
-    // 3. Rute GET untuk Sinkronisasi RTDB ke Firestore
-    log.Println("⚡️ DEBUG: Mendaftarkan rute sinkronisasi RTDB ke Firestore: /api/rtdb/sync (Sekarang Opsional)")
     router.HandleFunc("/api/rtdb/sync", func(w http.ResponseWriter, r *http.Request) {
         handlers.RealtimeDBToFirestoreHandler(w, r, app)
     })
     
-	// === ROUTE FCM FINAL: Menggunakan Path Root Sederhana /update-token ===
-	log.Println("⚡️ DEBUG: Mendaftarkan rute FCM final: /update-token (Non-slash & Trailing Slash)")
 	router.HandleFunc("/update-token", handlers.UpdateFcmTokenHandler)
 	router.HandleFunc("/update-token/", handlers.UpdateFcmTokenHandler)
-	// ===================================
 
 	finalHandler := corsMiddleware(router)
 	port := os.Getenv("PORT")
