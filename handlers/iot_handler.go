@@ -4,24 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
-	"EnerTrack-BE/db"
+	sqldb "EnerTrack-BE/db" // [PERBAIKAN]: Rename import SQL DB menjadi sqldb
 
 	"cloud.google.com/go/firestore"
 	firebase "firebase.google.com/go"
-	_ "firebase.google.com/go/db"
+
+	// Import Realtime Database Client
+
 	"firebase.google.com/go/messaging"
 )
-
-// --- KONFIGURASI ---
-// URL REST API RTDB (Tanpa SDK, Gratis & Cepat)
-const RTDB_REST_URL = "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app/sensor.json"
 
 // --- STRUKTUR DATA ---
 
@@ -46,6 +42,8 @@ type RtdbSensorData struct {
 	Current float64 `json:"current"` // Ampere
 	Power   float64 `json:"power"`   // Watt
 	Voltage float64 `json:"voltage"` // Voltase
+	// Jika perangkat IoT mengirim timestamp, uncomment baris bawah:
+	// Timestamp int64   `json:"timestamp"` 
 }
 
 // 4. Data untuk Sync ke Firestore
@@ -107,12 +105,14 @@ func GetCommandForDeviceHandler(w http.ResponseWriter, r *http.Request, app *fir
 
 // =================================================================
 // 3. REALTIME DB TO FIRESTORE HANDLER (GET - Sync)
+// Fungsi ini kini menggunakan Admin SDK untuk akses RTDB
 // =================================================================
 func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *firebase.App) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed, use GET", http.StatusMethodNotAllowed)
 		return
 	}
+    ctx := context.Background()
 
 	// 1. Ambil Parameter Device Label DAN User ID
 	query := r.URL.Query()
@@ -124,8 +124,6 @@ func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *f
 		log.Println("⚠️ Param 'device_label' kosong. Menggunakan default.")
 	}
 
-    // Default User ID jika tidak ada di query (misal untuk testing lama)
-    // Tapi sebaiknya diisi di query: ?user_id=16&device_label=...
     syncUserID := 0 
     if userIDStr != "" {
         if id, err := strconv.Atoi(userIDStr); err == nil {
@@ -138,38 +136,26 @@ func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *f
         return
     }
 
-	// 2. HTTP GET ke RTDB
-	client := http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(RTDB_REST_URL)
+	// 2. Inisialisasi RTDB Client
+    rtdbClient, err := app.Database(ctx)
 	if err != nil {
-		log.Printf("❌ Gagal GET ke RTDB: %v", err)
-		http.Error(w, "Error fetching RTDB", http.StatusInternalServerError)
+		log.Printf("❌ Gagal init RTDB Client: %v", err)
+		http.Error(w, "Error initializing RTDB client", http.StatusInternalServerError)
 		return
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("❌ RTDB Error Status: %d", resp.StatusCode)
-		http.Error(w, "RTDB returns error", http.StatusBadGateway)
-		return
-	}
-
-	// 3. Baca & Decode JSON
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("❌ Gagal baca body: %v", err)
-		http.Error(w, "Error reading body", http.StatusInternalServerError)
-		return
-	}
-
+	
+	// 3. Ambil data dari path "sensor" di RTDB menggunakan Admin SDK
 	var rtdbData RtdbSensorData
-	if err := json.Unmarshal(bodyBytes, &rtdbData); err != nil {
-		log.Printf("❌ Gagal parsing JSON RTDB: %v", err)
-		http.Error(w, "Invalid JSON from RTDB", http.StatusInternalServerError)
+    // Menggunakan ref.Get(ctx, &rtdbData) untuk langsung mengambil dan mengisi struct
+	err = rtdbClient.NewRef("sensor").Get(ctx, &rtdbData)
+	if err != nil {
+		// [PERBAIKAN]: Hilangkan db.IsNotFound yang menyebabkan error kompilasi
+		log.Printf("❌ Gagal GET data dari RTDB (Admin SDK): %v", err)
+		http.Error(w, "Error fetching data from RTDB", http.StatusInternalServerError)
 		return
 	}
 
-	// 4. Siapkan Data
+	// 4. Siapkan Data (Langkah 4, 5, dan seterusnya tetap sama)
 	syncData := SyncData{
 		UserID:      syncUserID, // Pake ID dari query param
 		DeviceLabel: deviceLabel,
@@ -178,7 +164,7 @@ func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *f
 		Watt:        rtdbData.Power,
 	}
 
-	// 5. Proses Simpan
+	// 5. Proses Simpan ke Firestore
 	processDataToFirestore(w, app, syncData)
 }
 
@@ -283,9 +269,8 @@ func processDataToFirestore(w http.ResponseWriter, app *firebase.App, data SyncD
 func getUserFcmTokenFromDB(userID int) string {
 	var token string
 	query := "SELECT fcm_token FROM users WHERE user_id = ?"
-    // Pastikan EnerTrack-BE/db sudah diimport dengan benar (bukan blank import _) 
-    // jika ingin ini jalan. Jika masih error import, uncomment baris bawah.
-	err := db.DB.QueryRow(query, userID).Scan(&token)
+    // [PERBAIKAN]: Menggunakan sqldb.DB
+	err := sqldb.DB.QueryRow(query, userID).Scan(&token)
 	if err != nil {
 		return ""
 	}
