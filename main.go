@@ -71,8 +71,8 @@ func main() {
 
     // 🔥 PERBAIKAN: FIX URL REGIONAL RTDB (KONFIGURASI PALING DASAR)
 	conf := &firebase.Config{
-		// [PERBAIKAN KRITIS]: Hapus field yang menyebabkan error. 
-        // Admin SDK akan menggunakan URL ini untuk koneksi RTDB.
+		// [PERBAIKAN]: Kembali ke konfigurasi dasar. URL harus ada.
+        // Hapus trailing slash jika ada.
         DatabaseURL: "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app",
         
         // ProjectID tetap harus ada
