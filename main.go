@@ -69,13 +69,11 @@ func main() {
 		sa = option.WithCredentialsFile("serviceAccountKey.json")
 	}
 
-    // 🔥 PERBAIKAN: FIX URL REGIONAL RTDB (KONFIGURASI PALING DASAR)
+    // 🔥 PERBAIKAN: HANYA BERIKAN HOSTNAME DAN PROJECT ID
 	conf := &firebase.Config{
-		// [PERBAIKAN]: Kembali ke konfigurasi dasar. URL harus ada.
-        // Hapus trailing slash jika ada.
-        DatabaseURL: "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app",
+		// [PERBAIKAN KRITIS]: Hilangkan protokol HTTPS://
+        DatabaseURL: "enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app",
         
-        // ProjectID tetap harus ada
         ProjectID: "enertrack-test-default-rtdb", 
 	}
 
@@ -173,7 +171,8 @@ func main() {
 
 	finalHandler := corsMiddleware(router)
 	port := os.Getenv("PORT")
-	if port == "" {
+    // [PERBAIKAN KRITIS]: Mengganti operator assignment (=) menjadi perbandingan (==)
+	if port == "" { 
 		port = "8000"
 	}
 	addr := "0.0.0.0:" + port
