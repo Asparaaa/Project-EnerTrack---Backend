@@ -52,21 +52,14 @@ type SyncData struct {
 }
 
 // =================================================================
-// 0. CORE LOGIC
+// 0. CORE LOGIC (Bersih: Tanpa Parameter ctx Unused)
 // =================================================================
-func syncAndNotify(parentCtx context.Context, app *firebase.App, data SyncData) (status string, err error) {
-    // [PERBAIKAN KRITIS] Gunakan context.Background() sebagai basis untuk Firestore
-    // Ini memutus ketergantungan deadline dari parentCtx (scheduler/http)
-    // Jadi Firestore punya waktu penuh 30 detik, tidak peduli sisa waktu parent berapa.
-    ctxFirestore, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+// [PERBAIKAN] Parameter 'ctx' dihapus dari sini karena tidak dipakai.
+func syncAndNotify(app *firebase.App, firestoreClient *firestore.Client, data SyncData) (status string, err error) {
+    // Gunakan context baru dengan timeout 30 detik untuk operasi database
+    // Ini memastikan operasi selesai meskipun request HTTP induk sudah putus
+    ctxWrite, cancel := context.WithTimeout(context.Background(), 30*time.Second)
     defer cancel()
-
-	firestoreClient, err := app.Firestore(ctxFirestore)
-	if err != nil {
-		log.Printf("❌ [CORE] Gagal init Firestore: %v", err)
-		return "ERROR", err
-	}
-	defer firestoreClient.Close()
 
 	docID := fmt.Sprintf("user%d_%s", data.UserID, strings.ReplaceAll(data.DeviceLabel, " ", "_"))
 	docRef := firestoreClient.Collection("monitoring_live").Doc(docID)
@@ -77,7 +70,7 @@ func syncAndNotify(parentCtx context.Context, app *firebase.App, data SyncData) 
 	}
 
 	var previousStatus string = "UNKNOWN"
-	snap, err := docRef.Get(ctxFirestore)
+	snap, err := docRef.Get(ctxWrite)
 	if err == nil && snap.Exists() {
 		oldData := snap.Data()
 		if status, ok := oldData["status"].(string); ok {
@@ -107,12 +100,12 @@ func syncAndNotify(parentCtx context.Context, app *firebase.App, data SyncData) 
 		userToken := getUserFcmTokenFromDB(data.UserID)
 		if userToken != "" {
 			log.Printf("🔔 Sending Notification to User %d: %s", data.UserID, notifTitle)
-            // Gunakan context background untuk notif juga
+            // Gunakan background context untuk notif juga
 			sendNotification(context.Background(), app, userToken, notifTitle, notifBody)
 		}
 	}
 
-	_, err = docRef.Set(ctxFirestore, map[string]interface{}{
+	_, err = docRef.Set(ctxWrite, map[string]interface{}{
 		"user_id":     data.UserID,
 		"device_name": data.DeviceLabel,
 		"voltase":     data.Voltase,
@@ -144,7 +137,16 @@ func IotInputHandler(w http.ResponseWriter, r *http.Request, app *firebase.App) 
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		return
 	}
-	status, err := syncAndNotify(r.Context(), app, SyncData{
+
+    client, err := app.Firestore(r.Context())
+    if err != nil {
+        http.Error(w, "Firestore Init Error", http.StatusInternalServerError)
+        return
+    }
+    defer client.Close()
+
+    // [UPDATE CALL] Hapus argumen context
+	status, err := syncAndNotify(app, client, SyncData{
 		UserID:      data.UserID,
 		DeviceLabel: data.DeviceLabel,
 		Voltase:     data.Voltase,
@@ -185,8 +187,8 @@ func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *f
 		}
 	}
 
-	client := http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(RTDB_REST_URL)
+	clientRest := http.Client{Timeout: 10 * time.Second}
+	resp, err := clientRest.Get(RTDB_REST_URL)
 	if err != nil {
 		http.Error(w, "RTDB Error", http.StatusInternalServerError)
 		return
@@ -196,7 +198,15 @@ func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *f
 	var rtdbData RtdbSensorData
 	json.NewDecoder(resp.Body).Decode(&rtdbData)
 
-	status, _ := syncAndNotify(ctx, app, SyncData{
+    fsClient, err := app.Firestore(ctx)
+    if err != nil {
+        http.Error(w, "Firestore Error", http.StatusInternalServerError)
+        return
+    }
+    defer fsClient.Close()
+
+    // [UPDATE CALL] Hapus argumen context
+	status, _ := syncAndNotify(app, fsClient, SyncData{
 		UserID:      targetID,
 		DeviceLabel: deviceLabel,
 		Voltase:     rtdbData.Voltage,
@@ -210,7 +220,7 @@ func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *f
 
 
 // =================================================================
-// 2. SCHEDULER INTERNAL (DINAMIS & PARALLEL)
+// 2. SCHEDULER INTERNAL (OPTIMAL: REUSE CLIENT)
 // =================================================================
 
 func getAllActiveIoTUsers() ([]int, error) {
@@ -237,15 +247,21 @@ func getAllActiveIoTUsers() ([]int, error) {
 
 func StartInternalScheduler(app *firebase.App, interval time.Duration) {
 	go func() {
+        ctxBg := context.Background()
+        fsClient, err := app.Firestore(ctxBg)
+        if err != nil {
+            log.Printf("❌ [SCHEDULER FATAL] Gagal init Firestore Client global: %v", err)
+            return 
+        }
+        defer fsClient.Close() 
+
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		log.Printf("⏰ Scheduler Internal (DINAMIS) dimulai, sync setiap %v...", interval)
+		log.Printf("⏰ Scheduler Internal (OPTIMAL) dimulai, sync setiap %v...", interval)
 
 		for {
 			select {
 			case <-ticker.C:
-				// log.Println("--- Memicu Sinkronisasi Dinamis ---")
-                
 				client := http.Client{Timeout: 10 * time.Second}
 				resp, err := client.Get(RTDB_REST_URL)
 				if err != nil {
@@ -275,8 +291,8 @@ func StartInternalScheduler(app *firebase.App, interval time.Duration) {
                     wg.Add(1)
                     go func(targetUID int) {
                         defer wg.Done()
-                        // Menggunakan context.Background() sebagai parent karena ini scheduler
-                        syncAndNotify(context.Background(), app, SyncData{
+                        // [UPDATE CALL] Hapus argumen context
+                        syncAndNotify(app, fsClient, SyncData{
                             UserID:      targetUID, 
                             DeviceLabel: "Sensor Utama", 
                             Voltase:     rtdbData.Voltage,
@@ -317,7 +333,7 @@ func sendNotification(ctx context.Context, app *firebase.App, token, title, body
         },
     }
     
-    ctxSend, cancel := context.WithTimeout(ctx, 15*time.Second)
+    ctxSend, cancel := context.WithTimeout(ctx, 15*time.Second) // Timeout 15s buat notif
     defer cancel()
     
     _, err = client.Send(ctxSend, msg)
