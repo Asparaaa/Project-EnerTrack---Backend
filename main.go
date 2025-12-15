@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json" // Wajib ada untuk encode JSON
+	"encoding/json" 
 	"log"
 	"net/http"
 	"os"
@@ -47,22 +47,18 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// [BARU] Handler Asli: Mengambil data appliances dari Database
+// [HANDLER AI] Handler Asli untuk AI Insight
 func RealUserAppliancesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// TODO: Di production, ambil UserID dari context/session.
-	// Untuk sekarang kita hardcode ke 16 agar fitur AI jalan di demo ini.
-	targetUserID := 16 
+	targetUserID := 16 // Hardcode sementara untuk demo
 
-	// Query ke Database
 	rows, err := db.DB.Query("SELECT id, user_id, name, brand, power, duration FROM appliances WHERE user_id = ?", targetUserID)
 	if err != nil {
 		log.Printf("❌ Gagal query appliances: %v", err)
-		// Jangan panik, kembalikan array kosong jika error DB agar app tidak crash
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("[]")) 
 		return
@@ -72,25 +68,18 @@ func RealUserAppliancesHandler(w http.ResponseWriter, r *http.Request) {
 	var appliances []ApplianceSimple
 	for rows.Next() {
 		var a ApplianceSimple
-		// Pastikan urutan Scan sesuai dengan urutan SELECT
 		if err := rows.Scan(&a.ID, &a.UserID, &a.Name, &a.Brand, &a.Power, &a.Duration); err == nil {
 			appliances = append(appliances, a)
-		} else {
-			log.Printf("⚠️ Gagal scan baris: %v", err)
 		}
 	}
 
-	// Return JSON
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	
 	if len(appliances) == 0 {
-		w.Write([]byte("[]")) // Pastikan return [] jika kosong, bukan null
+		w.Write([]byte("[]"))
 	} else {
 		json.NewEncoder(w).Encode(appliances)
 	}
-	
-	log.Printf("✅ Served %d appliances for User %d (AI Insight Ready)", len(appliances), targetUserID)
 }
 
 func main() {
@@ -128,11 +117,17 @@ func main() {
 	}
 
 	// =================================================================
-	// 🔥 PENTING: MENJALANKAN SCHEDULER INTERNAL (DINAMIS)
+	// 🔥 PENTING: MENJALANKAN SCHEDULER SECARA HARDCODE (USER 16)
 	// =================================================================
-	const syncInterval = 2 * time.Second
+	// Kita kembalikan ke cara lama yang terbukti sukses mendeteksi IoT.
+	const targetUserID = 16
+	const targetDevice = "Sensor Utama"
+	const syncInterval = 2 * time.Second 
+
 	if app != nil {
-		handlers.StartInternalScheduler(app, syncInterval)
+		// Panggil dengan parameter lengkap agar handler 'iot_handler.go' 
+		// tahu persis mau update punya siapa.
+		handlers.StartInternalScheduler(app, targetUserID, targetDevice, syncInterval)
 	}
 	// =================================================================
 
@@ -163,13 +158,10 @@ func main() {
 	router.HandleFunc("/categories", handlers.GetCategoriesHandler)
 	router.HandleFunc("/submit", handlers.SubmitHandler)
 
-	// === ROUTE AI ANALYZE (SUDAH ADA) ===
 	router.HandleFunc("/analyze", func(w http.ResponseWriter, r *http.Request) {
 		handlers.AnalyzeHandler(w, r, model)
 	})
 
-	// === [PERBAIKAN] ROUTE AI CHAT ===
-	// Kita ubah jadi "/api/chat" karena di Logcat Android kamu requestnya ke sana!
 	router.HandleFunc("/api/chat", func(w http.ResponseWriter, r *http.Request) {
 		handlers.ChatHandler(w, r, model)
 	})
@@ -179,7 +171,7 @@ func main() {
 	router.HandleFunc("/house-capacity", handlers.GetHouseCapacityHandler)
 	router.HandleFunc("/api/devices/list", handlers.GetUniqueDevicesHandler)
 
-    // [PERBAIKAN] Menggunakan RealUserAppliancesHandler agar AI bisa baca data
+	// [FIX] Handler AI yang benar
 	router.HandleFunc("/user/appliances", RealUserAppliancesHandler)
 	
 	router.HandleFunc("/user/appliances/", handlers.GetApplianceByIDHandler)
