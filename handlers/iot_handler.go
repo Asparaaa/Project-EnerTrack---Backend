@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	sqldb "EnerTrack-BE/db"
@@ -21,7 +22,7 @@ import (
 // --- KONFIGURASI REST API RTDB ---
 const RTDB_REST_URL = "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app/sensor.json"
 
-// --- STRUKTUR DATA ---
+// --- STRUKTUR DATA (SAMA) ---
 type IotData struct {
 	UserID      int     `json:"user_id"`
 	DeviceLabel string  `json:"device_label"`
@@ -37,9 +38,9 @@ type CommandResponse struct {
 }
 
 type RtdbSensorData struct {
-	Current float64 `json:"current"` // Ampere
-	Power   float64 `json:"power"`   // Watt
-	Voltage float64 `json:"voltage"` // Voltase
+	Current float64 `json:"current"` 
+	Power   float64 `json:"power"`   
+	Voltage float64 `json:"voltage"` 
 }
 
 type SyncData struct {
@@ -51,10 +52,14 @@ type SyncData struct {
 }
 
 // =================================================================
-// 0. CORE LOGIC: Sinkronisasi & Notifikasi
+// 0. CORE LOGIC (SAMA)
 // =================================================================
 func syncAndNotify(ctx context.Context, app *firebase.App, data SyncData) (status string, err error) {
-	firestoreClient, err := app.Firestore(ctx)
+    // [PERBAIKAN] Naikkan timeout Firestore jadi 30 detik agar tidak deadline exceeded
+    ctxFirestore, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+
+	firestoreClient, err := app.Firestore(ctxFirestore)
 	if err != nil {
 		log.Printf("❌ [CORE] Gagal init Firestore: %v", err)
 		return "ERROR", err
@@ -70,7 +75,7 @@ func syncAndNotify(ctx context.Context, app *firebase.App, data SyncData) (statu
 	}
 
 	var previousStatus string = "UNKNOWN"
-	snap, err := docRef.Get(ctx)
+	snap, err := docRef.Get(ctxFirestore)
 	if err == nil && snap.Exists() {
 		oldData := snap.Data()
 		if status, ok := oldData["status"].(string); ok {
@@ -100,11 +105,12 @@ func syncAndNotify(ctx context.Context, app *firebase.App, data SyncData) (statu
 		userToken := getUserFcmTokenFromDB(data.UserID)
 		if userToken != "" {
 			log.Printf("🔔 Sending Notification to User %d: %s", data.UserID, notifTitle)
-			sendNotification(ctx, app, userToken, notifTitle, notifBody)
+            // Pakai context background untuk notif biar gak gampang timeout
+			sendNotification(context.Background(), app, userToken, notifTitle, notifBody)
 		}
 	}
 
-	_, err = docRef.Set(ctx, map[string]interface{}{
+	_, err = docRef.Set(ctxFirestore, map[string]interface{}{
 		"user_id":     data.UserID,
 		"device_name": data.DeviceLabel,
 		"voltase":     data.Voltase,
@@ -115,7 +121,7 @@ func syncAndNotify(ctx context.Context, app *firebase.App, data SyncData) (statu
 	}, firestore.MergeAll)
 
 	if err != nil {
-		log.Printf("❌ [CORE] Gagal update Firestore: %v", err)
+		log.Printf("❌ [CORE] Gagal update Firestore User %d: %v", data.UserID, err)
 		return statusDevice, err
 	}
 
@@ -123,9 +129,8 @@ func syncAndNotify(ctx context.Context, app *firebase.App, data SyncData) (statu
 	return statusDevice, nil
 }
 
-// =================================================================
-// 1. IOT HANDLERS (HTTP)
-// =================================================================
+// ... (Handlers HTTP IotInputHandler, GetCommandForDeviceHandler, RealtimeDBToFirestoreHandler tetap sama, copy paste dari sebelumnya) ...
+// Saya skip agar fokus ke perbaikan Scheduler
 
 func IotInputHandler(w http.ResponseWriter, r *http.Request, app *firebase.App) {
 	if r.Method != http.MethodPost {
@@ -165,14 +170,12 @@ func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *f
 		return
 	}
 	ctx := context.Background()
-	
-	// Manual Trigger via HTTP masih bisa pakai query param
 	query := r.URL.Query()
 	userIDStr := query.Get("user_id")
 	deviceLabel := query.Get("device_label")
 	if deviceLabel == "" { deviceLabel = "Sensor Utama" }
 	
-	targetID := 16 // Default fallback
+	targetID := 16 
 	if userIDStr != "" {
 		if id, err := strconv.Atoi(userIDStr); err == nil {
 			targetID = id
@@ -202,65 +205,101 @@ func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *f
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "success", "device_status": status})
 }
 
+
 // =================================================================
-// 2. SCHEDULER INTERNAL (MODIFIKASI: KEMBALI KE HARDCODE PARAMETER)
+// 2. SCHEDULER INTERNAL (DINAMIS & PARALLEL)
 // =================================================================
 
-// Kita tambahkan parameter userID dan deviceLabel lagi supaya main.go bisa maksa User 16
-func StartInternalScheduler(app *firebase.App, targetUserID int, deviceLabel string, interval time.Duration) {
+// Helper untuk ambil semua user ID yang valid dari DB
+func getAllActiveIoTUsers() ([]int, error) {
+    // Ambil user yang punya token FCM (asumsi user aktif)
+    rows, err := sqldb.DB.Query("SELECT user_id FROM users WHERE fcm_token IS NOT NULL")
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
+
+    var userIDs []int
+    for rows.Next() {
+        var id int
+        if err := rows.Scan(&id); err == nil {
+            userIDs = append(userIDs, id)
+        }
+    }
+    
+    // Fallback minimal User 16 harus ada
+    if len(userIDs) == 0 {
+        return []int{16}, nil 
+    }
+    
+    return userIDs, nil
+}
+
+// Scheduler Dinamis Tanpa Parameter UserID Hardcode
+func StartInternalScheduler(app *firebase.App, interval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		log.Printf("⏰ Scheduler Internal dimulai untuk User %d, sync setiap %v...", targetUserID, interval)
+		log.Printf("⏰ Scheduler Internal (DINAMIS) dimulai, sync setiap %v...", interval)
 
 		for {
 			select {
 			case <-ticker.C:
-				// log.Println("--- Memicu Sinkronisasi Terjadwal (Hardcoded User) ---")
-				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-
-				// 1. HTTP GET ke RTDB (REST API - Universal)
+				log.Println("--- Memicu Sinkronisasi Dinamis ---")
+                
+                // 1. Ambil Data RTDB (Sekali saja)
 				client := http.Client{Timeout: 10 * time.Second}
 				resp, err := client.Get(RTDB_REST_URL)
-
 				if err != nil {
 					log.Printf("❌ [SCHEDULER] Gagal HTTP GET ke RTDB: %v", err)
-					cancel()
 					continue
 				}
 				
-				// Baca Body
 				bodyBytes, err := io.ReadAll(resp.Body)
-				resp.Body.Close() // Close immediately after read
-				
-				if err != nil {
-					cancel()
-					continue
-				}
+				resp.Body.Close()
+				if err != nil { continue }
 
 				var rtdbData RtdbSensorData
 				if err := json.Unmarshal(bodyBytes, &rtdbData); err != nil {
 					log.Printf("❌ [SCHEDULER] Gagal parsing JSON RTDB: %v", err)
-					cancel()
 					continue
 				}
 
-				// 2. Panggil fungsi inti untuk User ID yang di-HARDCODE (User 16)
-				syncAndNotify(ctx, app, SyncData{
-					UserID:      targetUserID, // Pakai ID yang dikirim dari main.go (16)
-					DeviceLabel: deviceLabel,  // Pakai nama device dari main.go ("Sensor Utama")
-					Voltase:     rtdbData.Voltage,
-					Ampere:      rtdbData.Current,
-					Watt:        rtdbData.Power,
-				})
+                // 2. Ambil Daftar User Dinamis
+                activeUsers, err := getAllActiveIoTUsers()
+                if err != nil {
+                    log.Printf("⚠️ Gagal ambil user list, fallback ke user 16: %v", err)
+                    activeUsers = []int{16}
+                }
 
-				cancel() // Bebaskan context
+                // 3. Update Secara Parallel (Pakai Goroutine)
+                // Ini mencegah timeout karena kita tidak menunggu satu per satu
+                var wg sync.WaitGroup
+                
+                for _, uid := range activeUsers {
+                    wg.Add(1)
+                    go func(targetUID int) {
+                        defer wg.Done()
+                        // Panggil core logic dengan context background (biar gak kena timeout induk)
+                        syncAndNotify(context.Background(), app, SyncData{
+                            UserID:      targetUID, 
+                            DeviceLabel: "Sensor Utama", // Default device name
+                            Voltase:     rtdbData.Voltage,
+                            Ampere:      rtdbData.Current,
+                            Watt:        rtdbData.Power,
+                        })
+                    }(uid)
+                }
+                
+                // Tunggu semua selesai (opsional, cuma buat log rapi)
+                wg.Wait()
+                // log.Println("--- Sinkronisasi Dinamis Selesai ---")
 			}
 		}
 	}()
 }
 
-// Fungsi Bantu
+// Fungsi Bantu (Sama)
 func getUserFcmTokenFromDB(userID int) string {
 	var token string
 	query := "SELECT fcm_token FROM users WHERE user_id = ?"
@@ -273,14 +312,26 @@ func getUserFcmTokenFromDB(userID int) string {
 
 func sendNotification(ctx context.Context, app *firebase.App, token, title, body string) {
 	client, err := app.Messaging(ctx)
-	if err == nil {
-		msg := &messaging.Message{
-			Token: token,
-			Notification: &messaging.Notification{
-				Title: title,
-				Body:  body,
-			},
-		}
-		client.Send(ctx, msg)
-	}
+	if err != nil {
+        log.Printf("❌ Gagal init Messaging client: %v", err)
+        return
+    }
+    
+    msg := &messaging.Message{
+        Token: token,
+        Notification: &messaging.Notification{
+            Title: title,
+            Body:  body,
+        },
+    }
+    // [PERBAIKAN] Naikkan timeout notif jadi 15 detik
+    ctxSend, cancel := context.WithTimeout(ctx, 15*time.Second)
+    defer cancel()
+    
+    _, err = client.Send(ctxSend, msg)
+    if err != nil {
+        log.Printf("❌ Gagal kirim notif: %v", err)
+    } else {
+        // log.Printf("✅ Notification sent") // Optional log
+    }
 }
