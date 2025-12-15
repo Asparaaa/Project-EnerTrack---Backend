@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json" 
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -117,17 +117,16 @@ func main() {
 	}
 
 	// =================================================================
-	// 🔥 PENTING: MENJALANKAN SCHEDULER SECARA HARDCODE (USER 16)
+	// 🔥 PENTING: MENJALANKAN SCHEDULER SECARA DINAMIS
 	// =================================================================
-	// Kita kembalikan ke cara lama yang terbukti sukses mendeteksi IoT.
-	const targetUserID = 16
-	const targetDevice = "Sensor Utama"
-	const syncInterval = 2 * time.Second 
+	// Kita gunakan dynamic scheduler yang ada di iot_handler.go
+	const syncInterval = 15 * time.Second // Interval agak santai biar gak spam
 
 	if app != nil {
-		// Panggil dengan parameter lengkap agar handler 'iot_handler.go' 
-		// tahu persis mau update punya siapa.
-		handlers.StartInternalScheduler(app, targetUserID, targetDevice, syncInterval)
+		// [FIX] Panggil dengan argumen yang benar: (app, interval)
+		// Tidak perlu lagi kirim user ID atau device label karena iot_handler.go 
+		// sudah mengambilnya secara dinamis dari database.
+		handlers.StartInternalScheduler(app, syncInterval)
 	}
 	// =================================================================
 

@@ -22,7 +22,7 @@ import (
 // --- KONFIGURASI REST API RTDB ---
 const RTDB_REST_URL = "https://enertrack-test-default-rtdb.asia-southeast1.firebasedatabase.app/sensor.json"
 
-// --- STRUKTUR DATA (SAMA) ---
+// --- STRUKTUR DATA ---
 type IotData struct {
 	UserID      int     `json:"user_id"`
 	DeviceLabel string  `json:"device_label"`
@@ -52,11 +52,12 @@ type SyncData struct {
 }
 
 // =================================================================
-// 0. CORE LOGIC (SAMA)
+// 0. CORE LOGIC
 // =================================================================
 func syncAndNotify(ctx context.Context, app *firebase.App, data SyncData) (status string, err error) {
-    // [PERBAIKAN] Naikkan timeout Firestore jadi 30 detik agar tidak deadline exceeded
-    ctxFirestore, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    // [PERBAIKAN] Gunakan 'ctx' sebagai parent context agar parameter tidak unused
+    // Timeout tetap 30 detik untuk operasi Firestore ini
+    ctxFirestore, cancel := context.WithTimeout(ctx, 30*time.Second)
     defer cancel()
 
 	firestoreClient, err := app.Firestore(ctxFirestore)
@@ -105,7 +106,8 @@ func syncAndNotify(ctx context.Context, app *firebase.App, data SyncData) (statu
 		userToken := getUserFcmTokenFromDB(data.UserID)
 		if userToken != "" {
 			log.Printf("🔔 Sending Notification to User %d: %s", data.UserID, notifTitle)
-            // Pakai context background untuk notif biar gak gampang timeout
+            // Gunakan context background untuk notif agar terpisah dari timeout Firestore
+            // (Atau bisa gunakan ctx jika ingin notif ikut batal saat parent batal)
 			sendNotification(context.Background(), app, userToken, notifTitle, notifBody)
 		}
 	}
@@ -129,8 +131,9 @@ func syncAndNotify(ctx context.Context, app *firebase.App, data SyncData) (statu
 	return statusDevice, nil
 }
 
-// ... (Handlers HTTP IotInputHandler, GetCommandForDeviceHandler, RealtimeDBToFirestoreHandler tetap sama, copy paste dari sebelumnya) ...
-// Saya skip agar fokus ke perbaikan Scheduler
+// =================================================================
+// 1. IOT HANDLERS (HTTP)
+// =================================================================
 
 func IotInputHandler(w http.ResponseWriter, r *http.Request, app *firebase.App) {
 	if r.Method != http.MethodPost {
@@ -210,9 +213,7 @@ func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *f
 // 2. SCHEDULER INTERNAL (DINAMIS & PARALLEL)
 // =================================================================
 
-// Helper untuk ambil semua user ID yang valid dari DB
 func getAllActiveIoTUsers() ([]int, error) {
-    // Ambil user yang punya token FCM (asumsi user aktif)
     rows, err := sqldb.DB.Query("SELECT user_id FROM users WHERE fcm_token IS NOT NULL")
     if err != nil {
         return nil, err
@@ -227,7 +228,6 @@ func getAllActiveIoTUsers() ([]int, error) {
         }
     }
     
-    // Fallback minimal User 16 harus ada
     if len(userIDs) == 0 {
         return []int{16}, nil 
     }
@@ -235,7 +235,6 @@ func getAllActiveIoTUsers() ([]int, error) {
     return userIDs, nil
 }
 
-// Scheduler Dinamis Tanpa Parameter UserID Hardcode
 func StartInternalScheduler(app *firebase.App, interval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -245,9 +244,8 @@ func StartInternalScheduler(app *firebase.App, interval time.Duration) {
 		for {
 			select {
 			case <-ticker.C:
-				log.Println("--- Memicu Sinkronisasi Dinamis ---")
+				// log.Println("--- Memicu Sinkronisasi Dinamis ---")
                 
-                // 1. Ambil Data RTDB (Sekali saja)
 				client := http.Client{Timeout: 10 * time.Second}
 				resp, err := client.Get(RTDB_REST_URL)
 				if err != nil {
@@ -265,25 +263,22 @@ func StartInternalScheduler(app *firebase.App, interval time.Duration) {
 					continue
 				}
 
-                // 2. Ambil Daftar User Dinamis
                 activeUsers, err := getAllActiveIoTUsers()
                 if err != nil {
                     log.Printf("⚠️ Gagal ambil user list, fallback ke user 16: %v", err)
                     activeUsers = []int{16}
                 }
 
-                // 3. Update Secara Parallel (Pakai Goroutine)
-                // Ini mencegah timeout karena kita tidak menunggu satu per satu
                 var wg sync.WaitGroup
                 
                 for _, uid := range activeUsers {
                     wg.Add(1)
                     go func(targetUID int) {
                         defer wg.Done()
-                        // Panggil core logic dengan context background (biar gak kena timeout induk)
+                        // Menggunakan context.Background() sebagai parent karena ini scheduler
                         syncAndNotify(context.Background(), app, SyncData{
                             UserID:      targetUID, 
-                            DeviceLabel: "Sensor Utama", // Default device name
+                            DeviceLabel: "Sensor Utama", 
                             Voltase:     rtdbData.Voltage,
                             Ampere:      rtdbData.Current,
                             Watt:        rtdbData.Power,
@@ -291,15 +286,12 @@ func StartInternalScheduler(app *firebase.App, interval time.Duration) {
                     }(uid)
                 }
                 
-                // Tunggu semua selesai (opsional, cuma buat log rapi)
                 wg.Wait()
-                // log.Println("--- Sinkronisasi Dinamis Selesai ---")
 			}
 		}
 	}()
 }
 
-// Fungsi Bantu (Sama)
 func getUserFcmTokenFromDB(userID int) string {
 	var token string
 	query := "SELECT fcm_token FROM users WHERE user_id = ?"
@@ -324,14 +316,12 @@ func sendNotification(ctx context.Context, app *firebase.App, token, title, body
             Body:  body,
         },
     }
-    // [PERBAIKAN] Naikkan timeout notif jadi 15 detik
+    
     ctxSend, cancel := context.WithTimeout(ctx, 15*time.Second)
     defer cancel()
     
     _, err = client.Send(ctxSend, msg)
     if err != nil {
         log.Printf("❌ Gagal kirim notif: %v", err)
-    } else {
-        // log.Printf("✅ Notification sent") // Optional log
     }
 }
