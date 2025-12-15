@@ -54,10 +54,11 @@ type SyncData struct {
 // =================================================================
 // 0. CORE LOGIC
 // =================================================================
-func syncAndNotify(ctx context.Context, app *firebase.App, data SyncData) (status string, err error) {
-    // [PERBAIKAN] Gunakan 'ctx' sebagai parent context agar parameter tidak unused
-    // Timeout tetap 30 detik untuk operasi Firestore ini
-    ctxFirestore, cancel := context.WithTimeout(ctx, 30*time.Second)
+func syncAndNotify(parentCtx context.Context, app *firebase.App, data SyncData) (status string, err error) {
+    // [PERBAIKAN KRITIS] Gunakan context.Background() sebagai basis untuk Firestore
+    // Ini memutus ketergantungan deadline dari parentCtx (scheduler/http)
+    // Jadi Firestore punya waktu penuh 30 detik, tidak peduli sisa waktu parent berapa.
+    ctxFirestore, cancel := context.WithTimeout(context.Background(), 30*time.Second)
     defer cancel()
 
 	firestoreClient, err := app.Firestore(ctxFirestore)
@@ -106,8 +107,7 @@ func syncAndNotify(ctx context.Context, app *firebase.App, data SyncData) (statu
 		userToken := getUserFcmTokenFromDB(data.UserID)
 		if userToken != "" {
 			log.Printf("🔔 Sending Notification to User %d: %s", data.UserID, notifTitle)
-            // Gunakan context background untuk notif agar terpisah dari timeout Firestore
-            // (Atau bisa gunakan ctx jika ingin notif ikut batal saat parent batal)
+            // Gunakan context background untuk notif juga
 			sendNotification(context.Background(), app, userToken, notifTitle, notifBody)
 		}
 	}
