@@ -51,10 +51,11 @@ type SyncData struct {
 }
 
 // =================================================================
-// 0. CORE LOGIC (Reuse Client & Timeout Panjang)
+// 0. CORE LOGIC (Reuse Client & Timeout Panjang 30s)
 // =================================================================
 func syncAndNotify(app *firebase.App, firestoreClient *firestore.Client, data SyncData) (status string, err error) {
     // [OPTIMASI] Timeout 30 detik agar kuat menghadapi jaringan lambat
+    // Menggunakan context.Background() agar tidak terpengaruh timeout scheduler
     ctxWrite, cancel := context.WithTimeout(context.Background(), 30*time.Second)
     defer cancel()
 
@@ -98,7 +99,7 @@ func syncAndNotify(app *firebase.App, firestoreClient *firestore.Client, data Sy
 		userToken := getUserFcmTokenFromDB(data.UserID)
 		if userToken != "" {
 			log.Printf("🔔 Sending Notification to User %d: %s", data.UserID, notifTitle)
-            // Notifikasi pakai context background terpisah
+            // Notifikasi pakai context background terpisah dengan timeout 15s
 			sendNotification(context.Background(), app, userToken, notifTitle, notifBody)
 		}
 	}
@@ -218,10 +219,10 @@ func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *f
 
 
 // =================================================================
-// 2. SCHEDULER INTERNAL (GABUNGAN: HARDCODE + OPTIMIZED)
+// 2. SCHEDULER INTERNAL (GABUNGAN: HARDCODE + OPTIMIZED REUSE)
 // =================================================================
 
-// [PERUBAHAN] Menerima parameter targetUserID lagi (Gaya Lama)
+// [PERUBAHAN PENTING] Menerima parameter targetUserID lagi (Gaya Lama)
 // Tapi di dalamnya pakai logika Reuse Client (Gaya Baru)
 func StartInternalScheduler(app *firebase.App, targetUserID int, deviceLabel string, interval time.Duration) {
 	go func() {
