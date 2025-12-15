@@ -122,7 +122,7 @@ func main() {
 	// Kita pakai user 16 dan "Sensor Utama" agar IoT pasti terdeteksi.
 	const targetUserID = 16
 	const targetDevice = "Sensor Utama"
-	const syncInterval = 10 * time.Second 
+	const syncInterval = 2 * time.Second 
 
 	if app != nil {
 		// Panggil dengan parameter lengkap (karena iot_handler.go sudah dibalikin ke model ini)
