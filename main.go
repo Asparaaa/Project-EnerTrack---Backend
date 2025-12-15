@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json" // Wajib ada untuk encode JSON
 	"log"
 	"net/http"
 	"os"
@@ -47,7 +47,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// [HANDLER AI] Handler Asli untuk AI Insight
+// [HANDLER AI] Agar fitur AI Insight tetap jalan
 func RealUserAppliancesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -117,16 +117,16 @@ func main() {
 	}
 
 	// =================================================================
-	// 🔥 PENTING: MENJALANKAN SCHEDULER SECARA DINAMIS
+	// 🔥 PENTING: SCHEDULER HARDCODE (USER 16) TAPI OPTIMIZED
 	// =================================================================
-	// Kita gunakan dynamic scheduler yang ada di iot_handler.go
-	const syncInterval = 15 * time.Second // Interval agak santai biar gak spam
+	// Kita pakai user 16 dan "Sensor Utama" agar IoT pasti terdeteksi.
+	const targetUserID = 16
+	const targetDevice = "Sensor Utama"
+	const syncInterval = 10 * time.Second 
 
 	if app != nil {
-		// [FIX] Panggil dengan argumen yang benar: (app, interval)
-		// Tidak perlu lagi kirim user ID atau device label karena iot_handler.go 
-		// sudah mengambilnya secara dinamis dari database.
-		handlers.StartInternalScheduler(app, syncInterval)
+		// Panggil dengan parameter lengkap (karena iot_handler.go sudah dibalikin ke model ini)
+		handlers.StartInternalScheduler(app, targetUserID, targetDevice, syncInterval)
 	}
 	// =================================================================
 
@@ -170,7 +170,7 @@ func main() {
 	router.HandleFunc("/house-capacity", handlers.GetHouseCapacityHandler)
 	router.HandleFunc("/api/devices/list", handlers.GetUniqueDevicesHandler)
 
-	// [FIX] Handler AI yang benar
+	// [FIX] Handler AI yang benar (Query ke User 16)
 	router.HandleFunc("/user/appliances", RealUserAppliancesHandler)
 	
 	router.HandleFunc("/user/appliances/", handlers.GetApplianceByIDHandler)

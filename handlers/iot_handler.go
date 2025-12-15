@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	sqldb "EnerTrack-BE/db"
@@ -52,11 +51,10 @@ type SyncData struct {
 }
 
 // =================================================================
-// 0. CORE LOGIC (Reuse Client & Hapus Parameter Context Unused)
+// 0. CORE LOGIC (Reuse Client & Timeout Panjang)
 // =================================================================
 func syncAndNotify(app *firebase.App, firestoreClient *firestore.Client, data SyncData) (status string, err error) {
-    // [OPTIMASI] Gunakan timeout lebih panjang (30 detik) untuk operasi tulis Firestore
-    // Ini penting karena koneksi antar-region kadang lambat.
+    // [OPTIMASI] Timeout 30 detik agar kuat menghadapi jaringan lambat
     ctxWrite, cancel := context.WithTimeout(context.Background(), 30*time.Second)
     defer cancel()
 
@@ -100,7 +98,7 @@ func syncAndNotify(app *firebase.App, firestoreClient *firestore.Client, data Sy
 		userToken := getUserFcmTokenFromDB(data.UserID)
 		if userToken != "" {
 			log.Printf("🔔 Sending Notification to User %d: %s", data.UserID, notifTitle)
-            // Notifikasi pakai context background terpisah agar tidak mengganggu timeout DB
+            // Notifikasi pakai context background terpisah
 			sendNotification(context.Background(), app, userToken, notifTitle, notifBody)
 		}
 	}
@@ -220,34 +218,14 @@ func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *f
 
 
 // =================================================================
-// 2. SCHEDULER INTERNAL (OPTIMAL: REUSE CLIENT)
+// 2. SCHEDULER INTERNAL (GABUNGAN: HARDCODE + OPTIMIZED)
 // =================================================================
 
-func getAllActiveIoTUsers() ([]int, error) {
-    rows, err := sqldb.DB.Query("SELECT user_id FROM users WHERE fcm_token IS NOT NULL")
-    if err != nil {
-        return nil, err
-    }
-    defer rows.Close()
-
-    var userIDs []int
-    for rows.Next() {
-        var id int
-        if err := rows.Scan(&id); err == nil {
-            userIDs = append(userIDs, id)
-        }
-    }
-    
-    if len(userIDs) == 0 {
-        return []int{16}, nil 
-    }
-    
-    return userIDs, nil
-}
-
-func StartInternalScheduler(app *firebase.App, interval time.Duration) {
+// [PERUBAHAN] Menerima parameter targetUserID lagi (Gaya Lama)
+// Tapi di dalamnya pakai logika Reuse Client (Gaya Baru)
+func StartInternalScheduler(app *firebase.App, targetUserID int, deviceLabel string, interval time.Duration) {
 	go func() {
-        // Init Client SEKALI SAJA di awal agar tidak buka-tutup koneksi
+        // 1. [OPTIMISASI BARU] Buat Client Firestore SEKALI SAJA
         ctxBg := context.Background()
         fsClient, err := app.Firestore(ctxBg)
         if err != nil {
@@ -258,11 +236,12 @@ func StartInternalScheduler(app *firebase.App, interval time.Duration) {
 
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		log.Printf("⏰ Scheduler Internal (OPTIMAL) dimulai, sync setiap %v...", interval)
+		log.Printf("⏰ Scheduler Internal dimulai untuk User %d, sync setiap %v...", targetUserID, interval)
 
 		for {
 			select {
 			case <-ticker.C:
+                // 2. Ambil data RTDB
 				client := http.Client{Timeout: 10 * time.Second}
 				resp, err := client.Get(RTDB_REST_URL)
 				if err != nil {
@@ -280,30 +259,15 @@ func StartInternalScheduler(app *firebase.App, interval time.Duration) {
 					continue
 				}
 
-                activeUsers, err := getAllActiveIoTUsers()
-                if err != nil {
-                    log.Printf("⚠️ Gagal ambil user list, fallback ke user 16: %v", err)
-                    activeUsers = []int{16}
-                }
-
-                var wg sync.WaitGroup
-                
-                for _, uid := range activeUsers {
-                    wg.Add(1)
-                    go func(targetUID int) {
-                        defer wg.Done()
-                        // Panggil core logic dengan client yang sudah di-reuse
-                        syncAndNotify(app, fsClient, SyncData{
-                            UserID:      targetUID, 
-                            DeviceLabel: "Sensor Utama", 
-                            Voltase:     rtdbData.Voltage,
-                            Ampere:      rtdbData.Current,
-                            Watt:        rtdbData.Power,
-                        })
-                    }(uid)
-                }
-                
-                wg.Wait()
+                // 3. [LOGIKA LAMA] Pakai Target User ID yang dikirim dari main.go
+                // 4. [OPTIMISASI BARU] Pakai fsClient yang sudah di-reuse dan fungsi syncAndNotify baru
+                syncAndNotify(app, fsClient, SyncData{
+                    UserID:      targetUserID, 
+                    DeviceLabel: deviceLabel, 
+                    Voltase:     rtdbData.Voltage,
+                    Ampere:      rtdbData.Current,
+                    Watt:        rtdbData.Power,
+                })
 			}
 		}
 	}()
