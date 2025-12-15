@@ -52,12 +52,11 @@ type SyncData struct {
 }
 
 // =================================================================
-// 0. CORE LOGIC (Bersih: Tanpa Parameter ctx Unused)
+// 0. CORE LOGIC (Reuse Client & Hapus Parameter Context Unused)
 // =================================================================
-// [PERBAIKAN] Parameter 'ctx' dihapus dari sini karena tidak dipakai.
 func syncAndNotify(app *firebase.App, firestoreClient *firestore.Client, data SyncData) (status string, err error) {
-    // Gunakan context baru dengan timeout 30 detik untuk operasi database
-    // Ini memastikan operasi selesai meskipun request HTTP induk sudah putus
+    // [OPTIMASI] Gunakan timeout lebih panjang (30 detik) untuk operasi tulis Firestore
+    // Ini penting karena koneksi antar-region kadang lambat.
     ctxWrite, cancel := context.WithTimeout(context.Background(), 30*time.Second)
     defer cancel()
 
@@ -70,6 +69,7 @@ func syncAndNotify(app *firebase.App, firestoreClient *firestore.Client, data Sy
 	}
 
 	var previousStatus string = "UNKNOWN"
+    // Operasi Baca (GET)
 	snap, err := docRef.Get(ctxWrite)
 	if err == nil && snap.Exists() {
 		oldData := snap.Data()
@@ -100,11 +100,12 @@ func syncAndNotify(app *firebase.App, firestoreClient *firestore.Client, data Sy
 		userToken := getUserFcmTokenFromDB(data.UserID)
 		if userToken != "" {
 			log.Printf("🔔 Sending Notification to User %d: %s", data.UserID, notifTitle)
-            // Gunakan background context untuk notif juga
+            // Notifikasi pakai context background terpisah agar tidak mengganggu timeout DB
 			sendNotification(context.Background(), app, userToken, notifTitle, notifBody)
 		}
 	}
 
+    // Operasi Tulis (SET)
 	_, err = docRef.Set(ctxWrite, map[string]interface{}{
 		"user_id":     data.UserID,
 		"device_name": data.DeviceLabel,
@@ -138,6 +139,7 @@ func IotInputHandler(w http.ResponseWriter, r *http.Request, app *firebase.App) 
 		return
 	}
 
+    // Client ad-hoc untuk HTTP request
     client, err := app.Firestore(r.Context())
     if err != nil {
         http.Error(w, "Firestore Init Error", http.StatusInternalServerError)
@@ -145,7 +147,6 @@ func IotInputHandler(w http.ResponseWriter, r *http.Request, app *firebase.App) 
     }
     defer client.Close()
 
-    // [UPDATE CALL] Hapus argumen context
 	status, err := syncAndNotify(app, client, SyncData{
 		UserID:      data.UserID,
 		DeviceLabel: data.DeviceLabel,
@@ -205,7 +206,6 @@ func RealtimeDBToFirestoreHandler(w http.ResponseWriter, r *http.Request, app *f
     }
     defer fsClient.Close()
 
-    // [UPDATE CALL] Hapus argumen context
 	status, _ := syncAndNotify(app, fsClient, SyncData{
 		UserID:      targetID,
 		DeviceLabel: deviceLabel,
@@ -247,6 +247,7 @@ func getAllActiveIoTUsers() ([]int, error) {
 
 func StartInternalScheduler(app *firebase.App, interval time.Duration) {
 	go func() {
+        // Init Client SEKALI SAJA di awal agar tidak buka-tutup koneksi
         ctxBg := context.Background()
         fsClient, err := app.Firestore(ctxBg)
         if err != nil {
@@ -291,7 +292,7 @@ func StartInternalScheduler(app *firebase.App, interval time.Duration) {
                     wg.Add(1)
                     go func(targetUID int) {
                         defer wg.Done()
-                        // [UPDATE CALL] Hapus argumen context
+                        // Panggil core logic dengan client yang sudah di-reuse
                         syncAndNotify(app, fsClient, SyncData{
                             UserID:      targetUID, 
                             DeviceLabel: "Sensor Utama", 
@@ -333,7 +334,7 @@ func sendNotification(ctx context.Context, app *firebase.App, token, title, body
         },
     }
     
-    ctxSend, cancel := context.WithTimeout(ctx, 15*time.Second) // Timeout 15s buat notif
+    ctxSend, cancel := context.WithTimeout(ctx, 15*time.Second) 
     defer cancel()
     
     _, err = client.Send(ctxSend, msg)
