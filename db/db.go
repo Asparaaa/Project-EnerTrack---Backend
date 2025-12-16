@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time" // [FIX] Wajib ditambahin buat ngatur waktu timeout
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -49,6 +50,26 @@ func InitDB() {
 		log.Fatal("Failed to connect to database:", err)
 	}
 
+	// =================================================================
+	// [FIX] SETTINGAN ANTI-ZOMBIE CONNECTION (PENTING BUAT RAILWAY)
+	// =================================================================
+	
+	// 1. SetConnMaxLifetime:
+	// Railway/Cloud biasanya mutus koneksi idle setelah 5-10 menit.
+	// Kita set 3 menit aja, biar Go otomatis "recycle" koneksi sebelum diputus server.
+	DB.SetConnMaxLifetime(3 * time.Minute)
+
+	// 2. SetMaxOpenConns:
+	// Batasi jumlah koneksi maksimal biar database free tier gak "meledak".
+	DB.SetMaxOpenConns(10)
+
+	// 3. SetMaxIdleConns:
+	// Jumlah koneksi nganggur yang boleh disimpen (standby).
+	// Samain atau dikit di bawah MaxOpenConns.
+	DB.SetMaxIdleConns(10)
+
+	// =================================================================
+
 	if err := DB.Ping(); err != nil {
 		log.Fatalf("Database tidak bisa dijangkau: %v", err)
 	}
@@ -57,11 +78,11 @@ func InitDB() {
 
 	// 1. Tabel Merek
 	createTableSQL := `
-        CREATE TABLE IF NOT EXISTS merek (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            nama_merek VARCHAR(100) NOT NULL UNIQUE
-        )
-    `
+		CREATE TABLE IF NOT EXISTS merek (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			nama_merek VARCHAR(100) NOT NULL UNIQUE
+		)
+	`
 	_, err = DB.Exec(createTableSQL)
 	if err != nil {
 		log.Printf("Warning: Could not create merek table: %v", err)
